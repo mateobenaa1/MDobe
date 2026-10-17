@@ -30,7 +30,7 @@ enum PadMode: String, CaseIterable, Identifiable {
 final class PadEditor {
     let document: PDFDocument
     let pdfView = PDFView()
-    @ObservationIgnored private let overlay = PencilOverlay()
+    @ObservationIgnored private let pencil = PencilLayer()
     @ObservationIgnored private var tap: UITapGestureRecognizer?
     @ObservationIgnored private var tapHandler: TapHandler?
     var undoManager: UndoManager?
@@ -47,10 +47,7 @@ final class PadEditor {
 
     init(document: PDFDocument) {
         self.document = document
-        // Las capas del Pencil tienen que configurarse ANTES de cargar el documento,
-        // si no PDFKit no las crea para las páginas.
-        overlay.editor = self
-        pdfView.pageOverlayViewProvider = overlay
+        pencil.editor = self
         pdfView.autoScales = true
         pdfView.displayMode = .singlePageContinuous
         pdfView.displayDirection = .vertical
@@ -63,9 +60,6 @@ final class PadEditor {
         self.tap = tap
         tapHandler = handler
 
-        NotificationCenter.default.addObserver(forName: .PDFViewScaleChanged, object: pdfView, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.overlay.updateResolution() }
-        }
         NotificationCenter.default.addObserver(forName: .PDFViewSelectionChanged, object: pdfView, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
@@ -75,9 +69,7 @@ final class PadEditor {
     }
 
     private func applyMode() {
-        // El modo marcado desactiva la selección de texto y baja la calidad de render: solo al escribir.
-        pdfView.isInMarkupMode = mode == .pencil
-        overlay.setActive(mode == .pencil)
+        pencil.setActive(mode == .pencil, over: pdfView)
         tap?.isEnabled = mode == .text || mode == .erase
     }
 
@@ -109,12 +101,14 @@ final class PadEditor {
     }
 
     /// Convierte los trazos del Apple Pencil en anotaciones del PDF (visibles también en el Mac).
-    func commit(_ strokes: [PKStroke], from canvas: UIView, on page: PDFPage) {
-        let toPage = { (p: CGPoint) in self.pdfView.convert(self.pdfView.convert(p, from: canvas), to: page) }
-        let u0 = toPage(.zero), u1 = toPage(CGPoint(x: 10, y: 0))
-        let unit = hypot(u1.x - u0.x, u1.y - u0.y) / 10 // pt de página por pt de pantalla
+    func commit(_ strokes: [PKStroke], from canvas: UIView) {
+        let unit = 1 / max(pdfView.scaleFactor, 0.01) // pt de página por pt de pantalla
         grouped("Escribir") {
             for stroke in strokes {
+                // Cada trazo va a la página donde empieza.
+                guard let start = stroke.path.first?.location.applying(stroke.transform),
+                      let page = pdfView.page(for: pdfView.convert(start, from: canvas), nearest: true) else { continue }
+                let toPage = { (p: CGPoint) in self.pdfView.convert(self.pdfView.convert(p, from: canvas), to: page) }
                 let marker = stroke.ink.inkType == .marker
                 let points = stroke.path.interpolatedPoints(by: .distance(marker ? 3 : 1.2)).map { toPage($0.location.applying(stroke.transform)) }
                 let sizes = stroke.path.map(\.size.width)
@@ -300,72 +294,65 @@ private final class TapHandler: NSObject {
     @objc func fire(_ g: UITapGestureRecognizer) { action(g) }
 }
 
-/// Un lienzo de PencilKit encima de cada página. Al terminar cada trazo se pasa al PDF y el lienzo se vacía.
-final class PencilOverlay: NSObject, PDFPageOverlayViewProvider, PKCanvasViewDelegate {
+/// Lienzo de PencilKit encima de todo el visor, a la resolución de la pantalla (nítido con cualquier zoom).
+/// El Pencil dibuja; el dedo sigue moviendo y ampliando el PDF porque le prestamos al lienzo los gestos del scroll.
+/// Al terminar cada trazo se pasa al PDF como anotación y el lienzo se vacía.
+final class PencilLayer: NSObject, PKCanvasViewDelegate {
     weak var editor: PadEditor?
     private let toolPicker = PKToolPicker(toolItems: [
         PKToolPickerInkingItem(type: .pen), PKToolPickerInkingItem(type: .pencil),
         PKToolPickerInkingItem(type: .marker), PKToolPickerRulerItem(),
     ])
-    private var canvases: [PDFPage: PKCanvasView] = [:]
-    private var active = false
+    private var canvas: PKCanvasView?
+    private weak var scrollView: UIScrollView?
 
-    func pdfView(_ view: PDFView, overlayViewFor page: PDFPage) -> UIView? {
-        let canvas = PKCanvasView()
-        canvas.backgroundColor = .clear
-        canvas.isOpaque = false
-        canvas.drawingPolicy = .pencilOnly // con el dedo se navega
-        canvas.delegate = self
-        canvas.isUserInteractionEnabled = active
-        canvas.contentScaleFactor = sharpScale
-        toolPicker.addObserver(canvas)
-        canvases[page] = canvas
-        if active, !toolPicker.isVisible { show(on: canvas) }
-        return canvas
-    }
-
-    func pdfView(_ pdfView: PDFView, willEndDisplayingOverlayView overlayView: UIView, for page: PDFPage) {
-        if let canvas = overlayView as? PKCanvasView { toolPicker.removeObserver(canvas) }
-        canvases[page] = nil
-    }
-
-    /// La capa vive en coordenadas de página (escala 1) y PDFKit la amplía con el zoom: sin esto el trazo se ve borroso.
-    private var sharpScale: CGFloat {
-        let screen = MainActor.assumeIsolated { editor?.pdfView.window?.screen.scale ?? 2 }
-        let zoom = MainActor.assumeIsolated { editor?.pdfView.scaleFactor ?? 1 }
-        return screen * max(zoom, 1)
-    }
-
-    func updateResolution() {
-        let scale = sharpScale
-        for canvas in canvases.values where canvas.contentScaleFactor != scale {
-            canvas.contentScaleFactor = scale
-            canvas.setNeedsDisplay()
-        }
-    }
-
-    func setActive(_ on: Bool) {
-        active = on
-        canvases.values.forEach { $0.isUserInteractionEnabled = on }
-        if on, let canvas = canvases.values.first {
-            show(on: canvas)
-        } else {
-            for canvas in canvases.values {
-                toolPicker.setVisible(false, forFirstResponder: canvas)
-                canvas.resignFirstResponder()
+    @MainActor
+    func setActive(_ on: Bool, over pdfView: PDFView) {
+        if on, canvas == nil {
+            let c = PKCanvasView(frame: pdfView.bounds)
+            c.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            c.backgroundColor = .clear
+            c.isOpaque = false
+            c.drawingPolicy = .pencilOnly
+            c.isScrollEnabled = false
+            c.delegate = self
+            pdfView.addSubview(c)
+            canvas = c
+            // Los gestos del scroll del PDF pasan al lienzo, solo para el dedo.
+            if let sv = Self.findScrollView(in: pdfView) {
+                scrollView = sv
+                sv.panGestureRecognizer.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
+                c.addGestureRecognizer(sv.panGestureRecognizer)
+                if let pinch = sv.pinchGestureRecognizer { c.addGestureRecognizer(pinch) }
             }
+            toolPicker.addObserver(c)
+            toolPicker.setVisible(true, forFirstResponder: c)
+            c.becomeFirstResponder()
+        } else if !on, let c = canvas {
+            toolPicker.setVisible(false, forFirstResponder: c)
+            toolPicker.removeObserver(c)
+            c.resignFirstResponder()
+            if let sv = scrollView {
+                sv.addGestureRecognizer(sv.panGestureRecognizer)
+                if let pinch = sv.pinchGestureRecognizer { sv.addGestureRecognizer(pinch) }
+            }
+            c.removeFromSuperview()
+            canvas = nil
         }
     }
 
-    private func show(on canvas: PKCanvasView) {
-        toolPicker.setVisible(true, forFirstResponder: canvas)
-        canvas.becomeFirstResponder()
+    private static func findScrollView(in view: UIView) -> UIScrollView? {
+        for sub in view.subviews {
+            if let sv = sub as? UIScrollView { return sv }
+            if let sv = findScrollView(in: sub) { return sv }
+        }
+        return nil
     }
 
     func canvasViewDrawingDidChange(_ canvas: PKCanvasView) {
-        guard !canvas.drawing.strokes.isEmpty, let page = canvases.first(where: { $0.value === canvas })?.key else { return }
+        guard !canvas.drawing.strokes.isEmpty else { return }
         let strokes = canvas.drawing.strokes
         canvas.drawing = PKDrawing()
-        MainActor.assumeIsolated { editor?.commit(strokes, from: canvas, on: page) }
+        MainActor.assumeIsolated { editor?.commit(strokes, from: canvas) }
     }
 }
