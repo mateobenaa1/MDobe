@@ -2,27 +2,20 @@ import Observation
 import PDFKit
 import SwiftUI
 
-@main
-struct MDobePadApp: App {
-    var body: some Scene {
-        DocumentGroup(newDocument: { PDFFile() }) { config in
-            PadDocumentView(file: config.document)
-        }
-    }
-}
-
 struct PadDocumentView: View {
-    @ObservedObject var file: PDFFile
-    @Environment(\.undoManager) private var undoManager
+    let doc: OpenDoc
     @State private var editor: PadEditor
     @State private var assistant: PadAssistant
     @State private var showAI = false
     @State private var showThumbs = true
     @State private var newText = ""
 
-    init(file: PDFFile) {
-        self.file = file
-        let editor = PadEditor(document: file.pdf)
+    private var undoManager: UndoManager { doc.undoManager }
+
+    init(doc: OpenDoc) {
+        self.doc = doc
+        let editor = PadEditor(document: doc.pdf)
+        editor.undoManager = doc.undoManager
         _editor = State(initialValue: editor)
         _assistant = State(initialValue: PadAssistant(editor: editor))
     }
@@ -47,8 +40,8 @@ struct PadDocumentView: View {
                 if editor.hasSelection {
                     Button("Resaltar", systemImage: "highlighter") { editor.highlightSelection() }
                 }
-                Button("Deshacer", systemImage: "arrow.uturn.backward") { undoManager?.undo() }
-                Button("Rehacer", systemImage: "arrow.uturn.forward") { undoManager?.redo() }
+                Button("Deshacer", systemImage: "arrow.uturn.backward") { undoManager.undo() }
+                Button("Rehacer", systemImage: "arrow.uturn.forward") { undoManager.redo() }
                 Menu("Páginas", systemImage: "doc.on.doc") {
                     ForEach(PageFactory.Paper.allCases, id: \.self) { paper in
                         Button("Página en blanco: \(paper.rawValue)") { editor.insertBlankPage(paper) }
@@ -75,8 +68,13 @@ struct PadDocumentView: View {
             }
             Button("Cancelar", role: .cancel) { newText = "" }
         }
-        .onAppear { editor.undoManager = undoManager }
-        .onChange(of: undoManager) { editor.undoManager = undoManager }
+        .navigationTitle(doc.name)
+        .navigationBarTitleDisplayMode(.inline)
+        .overlay(alignment: .bottomTrailing) {
+            if let status = doc.status {
+                Text(status).font(.caption).padding(6).background(.regularMaterial, in: Capsule()).padding(8)
+            }
+        }
     }
 }
 

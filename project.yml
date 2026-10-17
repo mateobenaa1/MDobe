@@ -11,7 +11,8 @@ targets:
     platform: iOS
     sources:
       - Sources/iPad
-      - Sources/Shared
+      - path: Sources/Shared
+        excludes: [PDFFile.swift]
       - path: Resources/Web
         type: folder
         buildPhase: resources
@@ -35,7 +36,7 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen: {}
-        UISupportsDocumentBrowser: true
+        UISupportsDocumentBrowser: false
         LSSupportsOpeningDocumentsInPlace: true
         UIApplicationSupportsIndirectInputEvents: true
         ITSAppUsesNonExemptEncryption: false
