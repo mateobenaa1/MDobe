@@ -6,6 +6,7 @@
 <script src="katex.min.js"></script>
 <script src="copy-tex.min.js"></script>
 <script src="marked.min.js"></script>
+<script src="render.js"></script>
 <style>
   :root { color-scheme: light dark; --user: rgba(0,122,255,.14); --ai: rgba(127,127,127,.12); --muted: #888; }
   html, body { margin: 0; background: transparent; font: 13px -apple-system, system-ui, sans-serif; color: CanvasText; }
@@ -35,31 +36,6 @@
 <div id="toast">LaTeX copiado</div>
 <script>
 const log = document.getElementById('log');
-const MATH = /\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)|\$([^\s$](?:[^$\n]*?[^\s$])?)\$/g;
-
-// La matemática se aparta antes de Markdown (que estropearía _ y \) y se vuelve a poner ya renderizada.
-function renderText(text, markdown) {
-  const math = [];
-  let src = text.replace(MATH, (m, d1, d2, i1, i2) => {
-    const display = d1 !== undefined || d2 !== undefined;
-    const tex = (d1 ?? d2 ?? i1 ?? i2).trim();
-    math.push({ tex, display });
-    return `@@M${math.length - 1}@@`;
-  });
-  // «página 8» → enlace a esa página del PDF
-  src = src.replace(/\b(p[áa]gina|p[áa]g\.)\s+(\d+)/gi, (m, w, n) => `[${m}](mdobe://page/${n})`);
-  let html = markdown ? marked.parse(src, { breaks: true }) : escapeHTML(src).replace(/\n/g, '<br>');
-  return html.replace(/@@M(\d+)@@/g, (m, i) => {
-    const { tex, display } = math[+i];
-    const out = katex.renderToString(tex, { displayMode: display, throwOnError: false, output: 'html' });
-    return display ? out.replace('class="katex-display"', `class="katex-display" data-tex="${escapeHTML(tex)}"`) : out;
-  });
-}
-
-function escapeHTML(s) {
-  return s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-}
-
 // Llamado desde Swift con la lista completa de mensajes.
 function render(messages) {
   log.innerHTML = messages.map(m => {

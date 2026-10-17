@@ -37,6 +37,7 @@ struct DocumentView: View {
                 assistant.explainFormula(png, page: page)
             }
         }
+        .sheet(isPresented: $editor.showBlockEditor) { BlockEditor(editor: editor) }
         .sheet(isPresented: $editor.showSignaturePad) {
             SignaturePad { editor.tool = .sign }
         }
@@ -46,7 +47,15 @@ struct DocumentView: View {
 
     @ViewBuilder
     private var statusOverlay: some View {
-        if let status = editor.ocrStatus {
+        if editor.pendingBlock != nil {
+            HStack {
+                Label("Haz clic en el PDF donde quieras colocar el bloque", systemImage: "hand.point.up.left")
+                Button("Cancelar") { editor.pendingBlock = nil }
+            }
+            .padding(.horizontal, 14).padding(.vertical, 8)
+            .background(.regularMaterial, in: Capsule())
+            .padding()
+        } else if let status = editor.ocrStatus {
             Label(status, systemImage: "text.viewfinder")
                 .padding(.horizontal, 14).padding(.vertical, 8)
                 .background(.regularMaterial, in: Capsule())
@@ -100,6 +109,15 @@ struct DocumentView: View {
                     Text("Una página continua").tag(PDFDisplayMode.singlePageContinuous)
                     Text("Dos páginas continuas").tag(PDFDisplayMode.twoUpContinuous)
                     Text("Una página").tag(PDFDisplayMode.singlePage)
+                }
+            }
+        }
+        ToolbarItem {
+            Menu("Insertar", systemImage: "plus.square.on.square") {
+                Button("Bloque de texto y fórmulas…") { editor.showBlockEditor = true }
+                Divider()
+                ForEach(Editor.Paper.allCases, id: \.self) { paper in
+                    Button("Página en blanco: \(paper.rawValue)") { editor.insertBlankPage(paper) }
                 }
             }
         }

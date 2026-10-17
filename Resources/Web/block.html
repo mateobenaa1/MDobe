@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="katex.min.css">
+<script src="katex.min.js"></script>
+<script src="marked.min.js"></script>
+<script src="render.js"></script>
+<style>
+  /* Unidades en pt: al exportar a PDF, 1 px CSS = 1 pt de la página. */
+  html, body { margin: 0; background: transparent; }
+  #block { box-sizing: border-box; padding: 8px 12px; font: 11pt "Helvetica Neue", Helvetica, sans-serif; line-height: 1.4;
+           color: #111; background: #f6f8fc; border-left: 3px solid #2f6fdc; border-radius: 4px; overflow-wrap: anywhere; }
+  #block.plain { background: transparent; border-left: none; padding: 0; }
+  #block p { margin: 0 0 .45em; } #block p:last-child { margin-bottom: 0; }
+  #block ul, #block ol { margin: .3em 0; padding-left: 1.3em; }
+  #block h1, #block h2, #block h3 { font-size: 12.5pt; margin: .4em 0 .3em; }
+  #block table { border-collapse: collapse; } #block td, #block th { border: 1px solid #bbb; padding: 2px 6px; }
+  .katex { font-size: 1.05em; }
+  .katex-display { margin: .4em 0; }
+</style>
+</head>
+<body>
+<div id="block"></div>
+<script>
+// Llamado desde Swift. Devuelve la altura del bloque en pt.
+// width = 0 → ocupar todo el ancho (vista previa).
+async function setContent(text, width, plain) {
+  const b = document.getElementById('block');
+  b.style.width = width ? width + 'px' : '100%';
+  b.className = plain ? 'plain' : '';
+  b.innerHTML = renderText(text, true, false);
+  await document.fonts.ready; // las fuentes de KaTeX cambian la altura al cargar
+  return Math.ceil(b.getBoundingClientRect().height);
+}
+</script>
+</body>
+</html>

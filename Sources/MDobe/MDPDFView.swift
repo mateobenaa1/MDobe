@@ -32,6 +32,9 @@ final class MDPDFView: PDFView {
         let p = convert(event.locationInWindow, from: nil)
         guard let editor, let page = page(for: p, nearest: false) else { return super.mouseDown(with: event) }
         let pagePoint = convert(p, to: page)
+        if let block = editor.pendingBlock {
+            return editor.placeBlock(block.text, plain: block.plain, at: pagePoint, on: page)
+        }
 
         switch tool {
         case .select, .highlight, .underline, .strike:
@@ -54,6 +57,10 @@ final class MDPDFView: PDFView {
             inkPoints = [p]
             startPreview()
         }
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53, editor?.pendingBlock != nil { editor?.pendingBlock = nil } else { super.keyDown(with: event) }
     }
 
     override func mouseDragged(with event: NSEvent) {

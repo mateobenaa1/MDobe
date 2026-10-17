@@ -53,6 +53,9 @@ final class Editor {
     var showSignaturePad = false
     var ocrStatus: String?
     var suggestOCR = false
+    var showBlockEditor = false
+    /// Bloque de texto listo para colocar: el siguiente clic en el PDF decide dónde.
+    var pendingBlock: (text: String, plain: Bool)?
     /// Recibe la imagen PNG de una fórmula recuadrada y su número de página (1…).
     @ObservationIgnored var onFormula: ((Data, Int) -> Void)?
 
@@ -371,7 +374,7 @@ final class Editor {
         undoManager?.setActionName("Eliminar página")
     }
 
-    private func insert(_ page: PDFPage, at index: Int) {
+    func insert(_ page: PDFPage, at index: Int) {
         document.insert(page, at: index)
         undoManager?.registerUndo(withTarget: self) { ed in
             ed.document.removePage(at: index)
