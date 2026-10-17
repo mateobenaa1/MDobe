@@ -26,6 +26,8 @@ enum Gemini {
         Eres el asistente de MDobe, un lector y editor de PDF para Mac. Tienes adjunto el PDF que el usuario tiene abierto, \
         incluidas sus anotaciones (resaltados, trazos a mano, notas) tal y como se ven en la página.
         Responde siempre en español, claro y bien estructurado. Puedes usar **negrita** y listas con guiones. \
+        Cuando menciones una página escribe «página N», donde N es el número de página del archivo PDF (la primera página del archivo es la 1); \
+        si el número impreso en la página es distinto, puedes añadirlo así: (numerada 5).
         No uses LaTeX: escribe las fórmulas con símbolos Unicode (α, β, ∈, ≤, ², √, ∑…).
         Devuelve SOLO un objeto JSON: {"respuesta": "texto para el usuario", "resaltar": [{"frase": "texto literal del PDF", "nota": "opcional"}]}.
         Rellena "resaltar" únicamente si el usuario pide resaltar, marcar o anotar algo; cada "frase" debe copiarse literalmente \

@@ -46,6 +46,8 @@ final class MDPDFView: PDFView {
             }
         case .eraser:
             editor.eraseAnnotation(at: pagePoint, on: page)
+        case .sign:
+            editor.stampSignature(at: pagePoint, on: page)
         case .ink, .whiteout:
             dragPage = page
             dragStart = p

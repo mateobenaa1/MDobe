@@ -22,6 +22,7 @@ struct DocumentView: View {
                 .navigationSplitViewColumnWidth(min: 120, ideal: 160, max: 260)
         } detail: {
             PDFKitView(pdfView: editor.pdfView)
+                .overlay(alignment: .bottom) { statusOverlay }
         }
         .inspector(isPresented: $showAI) {
             AIPanel(assistant: assistant)
@@ -30,8 +31,30 @@ struct DocumentView: View {
         .searchable(text: $editor.searchText, placement: .toolbar, prompt: "Buscar en el PDF")
         .onSubmit(of: .search) { editor.submitSearch() }
         .toolbar { toolbar }
+        .sheet(isPresented: $editor.showSignaturePad) {
+            SignaturePad { editor.tool = .sign }
+        }
         .onAppear { editor.undoManager = undoManager }
         .onChange(of: undoManager) { editor.undoManager = undoManager }
+    }
+
+    @ViewBuilder
+    private var statusOverlay: some View {
+        if let status = editor.ocrStatus {
+            Label(status, systemImage: "text.viewfinder")
+                .padding(.horizontal, 14).padding(.vertical, 8)
+                .background(.regularMaterial, in: Capsule())
+                .padding()
+        } else if editor.suggestOCR {
+            HStack {
+                Label("Este PDF parece escaneado: no se puede buscar ni seleccionar texto.", systemImage: "doc.viewfinder")
+                Button("Reconocer texto") { editor.runOCR() }.buttonStyle(.borderedProminent)
+                Button("Ahora no", systemImage: "xmark") { editor.suggestOCR = false }.labelStyle(.iconOnly).buttonStyle(.borderless)
+            }
+            .padding(.horizontal, 14).padding(.vertical, 8)
+            .background(.regularMaterial, in: Capsule())
+            .padding()
+        }
     }
 
     @ToolbarContentBuilder
@@ -72,6 +95,18 @@ struct DocumentView: View {
                     Text("Dos páginas continuas").tag(PDFDisplayMode.twoUpContinuous)
                     Text("Una página").tag(PDFDisplayMode.singlePage)
                 }
+            }
+        }
+        ToolbarItem {
+            Menu("Más", systemImage: "ellipsis.circle") {
+                Button("Cambiar mi firma…") { editor.showSignaturePad = true }
+                Divider()
+                let fields = editor.formFields.count
+                Text(fields > 0 ? "Formulario: \(fields) campos" : "Este PDF no tiene campos de formulario")
+                Button("Ir al siguiente campo vacío") { editor.goToNextEmptyField() }.disabled(fields == 0)
+                Button("Vaciar formulario") { editor.clearForm() }.disabled(fields == 0)
+                Divider()
+                Button("Reconocer texto (OCR)") { editor.runOCR() }.disabled(editor.ocrStatus != nil)
             }
         }
         ToolbarItemGroup {
@@ -163,6 +198,11 @@ struct AIPanel: View {
             }
         }
         .padding()
+        .environment(\.openURL, OpenURLAction { url in
+            guard url.scheme == "mdobe", let n = Int(url.lastPathComponent) else { return .systemAction }
+            assistant.goToPage(n)
+            return .handled
+        })
     }
 
     private var keyBox: some View {
@@ -189,7 +229,8 @@ private struct MessageRow: View {
     let message: Assistant.Message
 
     var body: some View {
-        let text = (try? AttributedString(markdown: message.text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(message.text)
+        let source = message.role == .ai ? Self.linkPages(message.text) : message.text
+        let text = (try? AttributedString(markdown: source, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(message.text)
         Group {
             switch message.role {
             case .user:
@@ -204,5 +245,12 @@ private struct MessageRow: View {
             }
         }
         .textSelection(.enabled)
+    }
+
+    private static let pageRef = try! NSRegularExpression(pattern: #"(?i)\b(p[áa]gina|p[áa]g\.)\s+(\d+)"#)
+
+    /// Convierte «página 8» en un enlace que lleva a esa página.
+    static func linkPages(_ text: String) -> String {
+        pageRef.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "[$0](mdobe://page/$2)")
     }
 }

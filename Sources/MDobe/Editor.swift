@@ -4,7 +4,7 @@ import PDFKit
 import SwiftUI
 
 enum Tool: String, CaseIterable, Identifiable {
-    case select, highlight, underline, strike, note, text, ink, whiteout, eraser
+    case select, highlight, underline, strike, note, text, ink, sign, whiteout, eraser
     var id: Self { self }
 
     var label: String {
@@ -15,7 +15,8 @@ enum Tool: String, CaseIterable, Identifiable {
         case .strike: "Tachar"
         case .note: "Nota"
         case .text: "Texto"
-        case .ink: "Dibujar / firmar"
+        case .ink: "Dibujar"
+        case .sign: "Firmar"
         case .whiteout: "Tapar"
         case .eraser: "Borrar anotación"
         }
@@ -29,7 +30,8 @@ enum Tool: String, CaseIterable, Identifiable {
         case .strike: "strikethrough"
         case .note: "note.text"
         case .text: "textformat"
-        case .ink: "signature"
+        case .ink: "pencil.tip"
+        case .sign: "signature"
         case .whiteout: "rectangle.fill"
         case .eraser: "eraser"
         }
@@ -46,6 +48,9 @@ final class Editor {
     var tool: Tool = .select { didSet { pdfView.tool = tool } }
     var color: Color = .yellow
     var undoManager: UndoManager?
+    var showSignaturePad = false
+    var ocrStatus: String?
+    var suggestOCR = false
 
     var searchText = ""
     private(set) var results: [PDFSelection] = []
@@ -59,6 +64,14 @@ final class Editor {
         pdfView.displayMode = .singlePageContinuous
         pdfView.backgroundColor = .underPageBackgroundColor
         pdfView.editor = self
+        suggestOCR = document.pageCount > 0 && (0..<min(3, document.pageCount)).allSatisfy(isScanned)
+        NotificationCenter.default.addObserver(forName: .PDFViewAnnotationHit, object: pdfView, queue: .main) { [weak self] n in
+            MainActor.assumeIsolated { self?.widgetHit(n) }
+        }
+    }
+
+    func isScanned(_ index: Int) -> Bool {
+        (document.page(at: index)?.string ?? "").trimmingCharacters(in: .whitespacesAndNewlines).count < 20
     }
 
     var nsColor: NSColor { NSColor(color) }
@@ -178,14 +191,13 @@ final class Editor {
         add(a, to: page)
     }
 
-    func addInk(_ path: NSBezierPath, on page: PDFPage) {
-        let width: CGFloat = 1.8
+    func addInk(_ path: NSBezierPath, on page: PDFPage, color: NSColor? = nil, width: CGFloat = 1.8) {
         let bounds = path.bounds.insetBy(dx: -width * 2, dy: -width * 2)
         let local = path.copy() as! NSBezierPath
         local.transform(using: AffineTransform(translationByX: -bounds.minX, byY: -bounds.minY))
         let a = PDFAnnotation(bounds: bounds, forType: .ink, withProperties: nil)
         a.add(local)
-        a.color = nsColor
+        a.color = color ?? nsColor
         a.border = PDFBorder()
         a.border?.lineWidth = width
         add(a, to: page)
@@ -226,6 +238,75 @@ final class Editor {
         let words = clean.split(separator: " ")
         guard words.count > 6 else { return nil }
         return document.findString(words.prefix(6).joined(separator: " "), withOptions: opts).first
+    }
+
+    // MARK: Firma
+
+    func stampSignature(at point: CGPoint, on page: PDFPage) {
+        guard let strokes = SignatureStore.load() else { showSignaturePad = true; return }
+        let width: CGFloat = 150
+        let height = (strokes.joined().map(\.y).max() ?? 0.3) * width
+        // Trazos normalizados (y hacia abajo) → coordenadas de página, centrados en el clic.
+        let map = { (q: CGPoint) in CGPoint(x: point.x - width / 2 + q.x * width, y: point.y + height / 2 - q.y * width) }
+        let path = NSBezierPath()
+        for stroke in strokes where stroke.count > 1 {
+            path.move(to: map(stroke[0]))
+            stroke.dropFirst().forEach { path.line(to: map($0)) }
+        }
+        addInk(path, on: page, color: NSColor(red: 0.05, green: 0.1, blue: 0.4, alpha: 1), width: 1.4)
+        undoManager?.setActionName("Firmar")
+    }
+
+    // MARK: Formularios
+
+    var formFields: [(page: PDFPage, field: PDFAnnotation)] {
+        (0..<document.pageCount).flatMap { i -> [(page: PDFPage, field: PDFAnnotation)] in
+            guard let page = document.page(at: i) else { return [] }
+            return page.annotations.filter { $0.type == "Widget" }.map { (page, $0) }
+        }
+    }
+
+    /// PDFKit rellena los campos por su cuenta; registramos el cambio para poder deshacerlo y que se guarde.
+    private func widgetHit(_ n: Notification) {
+        guard let a = n.userInfo?["PDFAnnotationHit"] as? PDFAnnotation, a.type == "Widget" else { return }
+        let text = a.widgetStringValue, state = a.buttonWidgetState
+        undoManager?.registerUndo(withTarget: self) { _ in
+            if a.widgetFieldType == .button { a.buttonWidgetState = state } else { a.widgetStringValue = text }
+        }
+        undoManager?.setActionName("Rellenar campo")
+    }
+
+    func goToNextEmptyField() {
+        let empty = formFields.filter { $0.field.widgetFieldType == .text && ($0.field.widgetStringValue ?? "").isEmpty }
+        guard let next = empty.first(where: { document.index(for: $0.page) >= currentPageIndex }) ?? empty.first else { return }
+        pdfView.go(to: next.field.bounds.insetBy(dx: -40, dy: -80), on: next.page)
+    }
+
+    func clearForm() {
+        grouped("Vaciar formulario") {
+            for (_, a) in formFields {
+                let text = a.widgetStringValue, state = a.buttonWidgetState
+                if a.widgetFieldType == .button { a.buttonWidgetState = .offState } else if a.widgetFieldType != .signature { a.widgetStringValue = "" }
+                undoManager?.registerUndo(withTarget: self) { _ in
+                    if a.widgetFieldType == .button { a.buttonWidgetState = state } else { a.widgetStringValue = text }
+                }
+            }
+        }
+    }
+
+    /// Sustituye cada página `from` por `to` (llevándose las anotaciones). Deshacer invierte el cambio.
+    func exchange(_ pairs: [(from: PDFPage, to: PDFPage)]) {
+        for (from, to) in pairs {
+            let i = document.index(for: from)
+            guard i >= 0, i < document.pageCount else { continue }
+            for a in from.annotations {
+                from.removeAnnotation(a)
+                to.addAnnotation(a)
+            }
+            document.removePage(at: i)
+            document.insert(to, at: i)
+        }
+        undoManager?.registerUndo(withTarget: self) { $0.exchange(pairs.map { ($0.to, $0.from) }) }
     }
 
     // MARK: Búsqueda

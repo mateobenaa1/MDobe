@@ -60,6 +60,11 @@ final class Assistant {
         hasKey = Gemini.hasKey
     }
 
+    func goToPage(_ n: Int) {
+        guard let page = editor.document.page(at: n - 1) else { return }
+        editor.pdfView.go(to: page)
+    }
+
     func reset() {
         messages = []
         history = []
