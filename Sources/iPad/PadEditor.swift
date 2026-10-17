@@ -51,7 +51,6 @@ final class PadEditor {
         // si no PDFKit no las crea para las páginas.
         overlay.editor = self
         pdfView.pageOverlayViewProvider = overlay
-        pdfView.isInMarkupMode = true
         pdfView.autoScales = true
         pdfView.displayMode = .singlePageContinuous
         pdfView.displayDirection = .vertical
@@ -64,6 +63,9 @@ final class PadEditor {
         self.tap = tap
         tapHandler = handler
 
+        NotificationCenter.default.addObserver(forName: .PDFViewScaleChanged, object: pdfView, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.overlay.updateResolution() }
+        }
         NotificationCenter.default.addObserver(forName: .PDFViewSelectionChanged, object: pdfView, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
@@ -73,6 +75,8 @@ final class PadEditor {
     }
 
     private func applyMode() {
+        // El modo marcado desactiva la selección de texto y baja la calidad de render: solo al escribir.
+        pdfView.isInMarkupMode = mode == .pencil
         overlay.setActive(mode == .pencil)
         tap?.isEnabled = mode == .text || mode == .erase
     }
@@ -313,6 +317,7 @@ final class PencilOverlay: NSObject, PDFPageOverlayViewProvider, PKCanvasViewDel
         canvas.drawingPolicy = .pencilOnly // con el dedo se navega
         canvas.delegate = self
         canvas.isUserInteractionEnabled = active
+        canvas.contentScaleFactor = sharpScale
         toolPicker.addObserver(canvas)
         canvases[page] = canvas
         if active, !toolPicker.isVisible { show(on: canvas) }
@@ -322,6 +327,21 @@ final class PencilOverlay: NSObject, PDFPageOverlayViewProvider, PKCanvasViewDel
     func pdfView(_ pdfView: PDFView, willEndDisplayingOverlayView overlayView: UIView, for page: PDFPage) {
         if let canvas = overlayView as? PKCanvasView { toolPicker.removeObserver(canvas) }
         canvases[page] = nil
+    }
+
+    /// La capa vive en coordenadas de página (escala 1) y PDFKit la amplía con el zoom: sin esto el trazo se ve borroso.
+    private var sharpScale: CGFloat {
+        let screen = MainActor.assumeIsolated { editor?.pdfView.window?.screen.scale ?? 2 }
+        let zoom = MainActor.assumeIsolated { editor?.pdfView.scaleFactor ?? 1 }
+        return screen * max(zoom, 1)
+    }
+
+    func updateResolution() {
+        let scale = sharpScale
+        for canvas in canvases.values where canvas.contentScaleFactor != scale {
+            canvas.contentScaleFactor = scale
+            canvas.setNeedsDisplay()
+        }
     }
 
     func setActive(_ on: Bool) {
