@@ -1,0 +1,51 @@
+# Proyecto de la app de iPad (la del Mac se compila con SwiftPM: scripts/install.sh).
+# Generar: xcodegen generate
+name: MDobe
+options:
+  bundleIdPrefix: com.mateobenaa1
+  deploymentTarget:
+    iOS: "18.0"
+targets:
+  MDobeiPad:
+    type: application
+    platform: iOS
+    sources:
+      - Sources/iPad
+      - Sources/Shared
+      - path: Resources/Web
+        type: folder
+        buildPhase: resources
+      - Resources/iPad/Assets.xcassets
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.mateobenaa1.mdobe.ipad
+        PRODUCT_NAME: MDobe
+        TARGETED_DEVICE_FAMILY: "2"
+        SWIFT_VERSION: "5.0"
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        GENERATE_INFOPLIST_FILE: NO
+    info:
+      path: Resources/iPad/Info.plist
+      properties:
+        CFBundleDisplayName: MDobe
+        CFBundleDevelopmentRegion: es
+        CFBundleLocalizations: [es]
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen: {}
+        UISupportsDocumentBrowser: true
+        LSSupportsOpeningDocumentsInPlace: true
+        UIApplicationSupportsIndirectInputEvents: true
+        ITSAppUsesNonExemptEncryption: false
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Documento PDF
+            CFBundleTypeRole: Editor
+            LSHandlerRank: Alternate
+            LSItemContentTypes: [com.adobe.pdf]

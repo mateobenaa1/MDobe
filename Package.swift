@@ -5,7 +5,7 @@ let package = Package(
     name: "MDobe",
     platforms: [.macOS(.v26)],
     targets: [
-        .executableTarget(name: "MDobe", path: "Sources/MDobe")
+        .executableTarget(name: "MDobe", path: "Sources", sources: ["MDobe", "Shared"])
     ],
     swiftLanguageModes: [.v5]
 )

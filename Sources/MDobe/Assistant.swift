@@ -8,12 +8,7 @@ import PDFKit
 /// - Apple Intelligence: local y sin límites, pero con poca memoria de contexto.
 @MainActor @Observable
 final class Assistant {
-    struct Message: Identifiable {
-        enum Role { case user, ai, info }
-        let id = UUID()
-        let role: Role
-        var text: String
-    }
+    typealias Message = ChatMessage
 
     enum Provider: String, CaseIterable, Identifiable {
         case gemini, apple

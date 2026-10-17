@@ -5,14 +5,10 @@ import WebKit
 // MARK: Páginas y bloques
 
 extension Editor {
-    enum Paper: String, CaseIterable {
-        case plain = "lisa", grid = "cuadrícula", lines = "rayas"
-    }
-
     @discardableResult
-    func insertBlankPage(_ paper: Paper) -> PDFPage? {
+    func insertBlankPage(_ paper: PageFactory.Paper) -> PDFPage? {
         let box = pdfView.currentPage?.bounds(for: .mediaBox) ?? CGRect(x: 0, y: 0, width: 595, height: 842)
-        guard let page = Self.composePage(box: box, draw: { ctx in Self.drawPaper(paper, in: box, ctx) }) else { return nil }
+        guard let page = PageFactory.blank(paper, box: box) else { return nil }
         insert(page, at: currentPageIndex + 1)
         undoManager?.setActionName("Insertar página")
         pdfView.go(to: page)
@@ -38,7 +34,7 @@ extension Editor {
                 }
                 guard let ref = target.pageRef else { return }
                 let rect = CGRect(x: left, y: top - size.height, width: size.width, height: size.height)
-                guard let newPage = Self.composePage(box: ref.getBoxRect(.mediaBox), draw: { ctx in
+                guard let newPage = PageFactory.compose(box: ref.getBoxRect(.mediaBox), draw: { ctx in
                     ctx.drawPDFPage(ref)
                     ctx.translateBy(x: rect.minX, y: rect.minY)
                     ctx.drawPDFPage(block)
@@ -50,39 +46,6 @@ extension Editor {
             } catch {
                 ocrStatus = "No se pudo crear el bloque: \(error.localizedDescription)"
             }
-        }
-    }
-
-    static func composePage(box: CGRect, draw: (CGContext) -> Void) -> PDFPage? {
-        let data = NSMutableData()
-        var mediaBox = box
-        guard let consumer = CGDataConsumer(data: data as CFMutableData),
-              let ctx = CGContext(consumer: consumer, mediaBox: &mediaBox, nil) else { return nil }
-        ctx.beginPDFPage(nil)
-        draw(ctx)
-        ctx.endPDFPage()
-        ctx.closePDF()
-        return PDFDocument(data: data as Data)?.page(at: 0)
-    }
-
-    private static func drawPaper(_ paper: Paper, in box: CGRect, _ ctx: CGContext) {
-        ctx.setFillColor(.white)
-        ctx.fill(box)
-        ctx.setLineWidth(0.4)
-        switch paper {
-        case .plain: break
-        case .grid:
-            ctx.setStrokeColor(CGColor(red: 0.55, green: 0.7, blue: 0.9, alpha: 0.55))
-            let step: CGFloat = 14.17 // 5 mm
-            for x in stride(from: box.minX, through: box.maxX, by: step) { ctx.move(to: CGPoint(x: x, y: box.minY)); ctx.addLine(to: CGPoint(x: x, y: box.maxY)) }
-            for y in stride(from: box.minY, through: box.maxY, by: step) { ctx.move(to: CGPoint(x: box.minX, y: y)); ctx.addLine(to: CGPoint(x: box.maxX, y: y)) }
-            ctx.strokePath()
-        case .lines:
-            ctx.setStrokeColor(CGColor(red: 0.55, green: 0.7, blue: 0.9, alpha: 0.7))
-            for y in stride(from: box.maxY - 72, through: box.minY + 36, by: -22.7) { // 8 mm
-                ctx.move(to: CGPoint(x: box.minX + 36, y: y)); ctx.addLine(to: CGPoint(x: box.maxX - 36, y: y))
-            }
-            ctx.strokePath()
         }
     }
 }

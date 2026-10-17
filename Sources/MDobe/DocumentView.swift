@@ -116,7 +116,7 @@ struct DocumentView: View {
             Menu("Insertar", systemImage: "plus.square.on.square") {
                 Button("Bloque de texto y fórmulas…") { editor.showBlockEditor = true }
                 Divider()
-                ForEach(Editor.Paper.allCases, id: \.self) { paper in
+                ForEach(PageFactory.Paper.allCases, id: \.self) { paper in
                     Button("Página en blanco: \(paper.rawValue)") { editor.insertBlankPage(paper) }
                 }
             }

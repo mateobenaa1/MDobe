@@ -1,6 +1,22 @@
-// Genera AppIcon.icns: swift scripts/make-icon.swift Resources/AppIcon.icns
+// Genera AppIcon.icns (Mac) o un PNG de 1024 sin márgenes (iPad):
+//   swift scripts/make-icon.swift Resources/AppIcon.icns
+//   swift scripts/make-icon.swift Resources/iPad/Assets.xcassets/AppIcon.appiconset/icon.png
 import AppKit
 let out = CommandLine.arguments[1]
+if out.hasSuffix(".png") {
+    let px = 1024, s = CGFloat(px)
+    let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: px, pixelsHigh: px, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+    NSGradient(starting: NSColor(red: 0.86, green: 0.2, blue: 0.16, alpha: 1), ending: NSColor(red: 0.6, green: 0.08, blue: 0.08, alpha: 1))!
+        .draw(in: NSRect(x: 0, y: 0, width: s, height: s), angle: -90)
+    let str = NSAttributedString(string: "MD", attributes: [.font: NSFont.systemFont(ofSize: s * 0.4, weight: .heavy), .foregroundColor: NSColor.white])
+    let sz = str.size()
+    str.draw(at: NSPoint(x: (s - sz.width) / 2, y: (s - sz.height) / 2))
+    NSGraphicsContext.restoreGraphicsState()
+    try! rep.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: out))
+    exit(0)
+}
 let set = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("AppIcon.iconset")
 try? FileManager.default.removeItem(at: set)
 try! FileManager.default.createDirectory(at: set, withIntermediateDirectories: true)
