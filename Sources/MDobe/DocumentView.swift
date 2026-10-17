@@ -123,12 +123,8 @@ struct AIPanel: View {
             }
             .pickerStyle(.segmented).labelsHidden()
 
-            if assistant.provider == .geminiKey, !assistant.hasKey {
+            if assistant.provider == .gemini, !assistant.hasKey {
                 keyBox
-            }
-            if assistant.provider == .geminiAccount {
-                Text("Usa tu cuenta de Google mediante Gemini CLI. Si te pide iniciar sesión: abre Terminal, escribe «gemini», elige «Login with Google» y luego /quit.")
-                    .font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
             }
             if let reason = assistant.unavailableReason {
                 Text(reason).font(.callout).foregroundStyle(.orange).frame(maxWidth: .infinity, alignment: .leading)

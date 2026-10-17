@@ -3,9 +3,8 @@ import FoundationModels
 import Observation
 import PDFKit
 
-/// Asistente del PDF con tres motores gratuitos:
-/// - Gemini con la cuenta de Google del usuario (Gemini CLI, usa su plan).
-/// - Gemini con clave gratuita de AI Studio.
+/// Asistente del PDF con dos motores gratuitos:
+/// - Gemini con clave gratuita de AI Studio: ve el PDF entero.
 /// - Apple Intelligence: local y sin límites, pero con poca memoria de contexto.
 @MainActor @Observable
 final class Assistant {
@@ -17,13 +16,12 @@ final class Assistant {
     }
 
     enum Provider: String, CaseIterable, Identifiable {
-        case geminiAccount, geminiKey, apple
+        case gemini, apple
         var id: Self { self }
         var label: String {
             switch self {
-            case .geminiAccount: "Gemini · tu cuenta"
-            case .geminiKey: "Gemini · gratis"
-            case .apple: "Apple"
+            case .gemini: "Gemini"
+            case .apple: "Apple · sin internet"
             }
         }
         var usesGemini: Bool { self != .apple }
@@ -43,7 +41,7 @@ final class Assistant {
 
     init(editor: Editor) {
         self.editor = editor
-        provider = Provider(rawValue: UserDefaults.standard.string(forKey: "assistant.provider") ?? "") ?? .geminiAccount
+        provider = Provider(rawValue: UserDefaults.standard.string(forKey: "assistant.provider") ?? "") ?? .gemini
     }
 
     var unavailableReason: String? {
@@ -147,9 +145,7 @@ final class Assistant {
             }
             prompt += "Petición del usuario: \(question)"
 
-            let reply = provider == .geminiAccount
-                ? try await Gemini.askCLI(prompt: prompt, pdf: pdf)
-                : try await Gemini.askAPI(prompt: prompt, pdf: pdf)
+            let reply = try await Gemini.askAPI(prompt: prompt, pdf: pdf)
             let found = apply(reply.highlights)
             var text = reply.text
             if !reply.highlights.isEmpty {
@@ -174,7 +170,7 @@ final class Assistant {
         if let reason = unavailableReason {
             return messages.append(.init(role: .info, text: reason))
         }
-        if provider == .geminiKey, !hasKey {
+        if provider == .gemini, !hasKey {
             return messages.append(.init(role: .info, text: Gemini.Failure.noKey.localizedDescription))
         }
         messages.append(.init(role: .user, text: user))

@@ -1,9 +1,8 @@
 import Foundation
 import Security
 
-/// Gemini de dos formas, ambas viendo el PDF completo (con las anotaciones del usuario):
-/// - `cli`: el programa oficial Gemini CLI con la sesión de Google del usuario (usa su plan de pago).
-/// - `api`: la API gratuita de Google AI Studio con una clave guardada en el Llavero.
+/// Gemini vía la API gratuita de Google AI Studio (clave en el Llavero).
+/// Recibe el PDF completo, así que ve también las anotaciones a mano del usuario.
 enum Gemini {
     struct Reply {
         var text: String
@@ -11,15 +10,13 @@ enum Gemini {
     }
 
     enum Failure: LocalizedError {
-        case noKey, badKey, rateLimited, tooLarge, cliMissing, cliNotLoggedIn, other(String)
+        case noKey, badKey, rateLimited, tooLarge, other(String)
         var errorDescription: String? {
             switch self {
             case .noKey: "Pega tu clave gratuita de Gemini en el panel (aistudio.google.com/apikey)."
             case .badKey: "Google ha rechazado la clave. Revísala en el panel."
-            case .rateLimited: "Has llegado al límite gratuito por ahora. Espera un poco o cambia a la otra opción del selector."
+            case .rateLimited: "Has llegado al límite gratuito por ahora. Espera un poco o usa Apple mientras tanto."
             case .tooLarge: "El PDF es demasiado grande para enviarlo (máx. ~18 MB)."
-            case .cliMissing: "Gemini CLI no está instalado. En Terminal: npm install -g @google/gemini-cli"
-            case .cliNotLoggedIn: "Inicia sesión una vez: abre Terminal, escribe «gemini», elige «Login with Google» y luego /quit."
             case .other(let msg): msg
             }
         }
@@ -54,7 +51,7 @@ enum Gemini {
         )
     }
 
-    // MARK: A · API gratuita
+    // MARK: API gratuita
 
     static let keyURL = URL(string: "https://aistudio.google.com/apikey")!
     static var hasKey: Bool { Keychain.read(account: "gemini-api") != nil }
@@ -92,53 +89,6 @@ enum Gemini {
         let text = parts.compactMap { $0["text"] as? String }.joined()
         guard !text.isEmpty else { throw Failure.other("Gemini no ha devuelto respuesta. Prueba a reformular la pregunta.") }
         return parse(text)
-    }
-
-    // MARK: B · Gemini CLI con la cuenta del usuario
-
-    static func askCLI(prompt: String, pdf: Data) async throws -> Reply {
-        guard pdf.count < maxPDFBytes else { throw Failure.tooLarge }
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("MDobe-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: dir) }
-        try pdf.write(to: dir.appendingPathComponent("documento.pdf"))
-        let errURL = dir.appendingPathComponent("error.log")
-        FileManager.default.createFile(atPath: errURL.path, contents: nil)
-
-        let input = "\(instructions)\n\n\(prompt)"
-        let (status, out) = try await Task.detached { () throws -> (Int32, Data) in
-            let p = Process()
-            // Shell de inicio de sesión para tener el mismo PATH que en Terminal (node, gemini).
-            p.executableURL = URL(fileURLWithPath: "/bin/zsh")
-            p.arguments = ["-lc", #"exec gemini --approval-mode plan --output-format json -p "$1""#, "zsh",
-                           "Documento adjunto: @documento.pdf — sigue las instrucciones recibidas por la entrada estándar."]
-            p.currentDirectoryURL = dir
-            let stdin = Pipe(), stdout = Pipe()
-            p.standardInput = stdin
-            p.standardOutput = stdout
-            p.standardError = try FileHandle(forWritingTo: errURL)
-            try p.run()
-            stdin.fileHandleForWriting.write(Data(input.utf8))
-            try? stdin.fileHandleForWriting.close()
-            let timer = DispatchWorkItem { if p.isRunning { p.terminate() } }
-            DispatchQueue.global().asyncAfter(deadline: .now() + 240, execute: timer)
-            let data = stdout.fileHandleForReading.readDataToEndOfFile()
-            p.waitUntilExit()
-            timer.cancel()
-            return (p.terminationStatus, data)
-        }.value
-
-        let stderr = (try? String(contentsOf: errURL, encoding: .utf8)) ?? ""
-        let raw = String(decoding: out, as: UTF8.self)
-        let json = raw.firstIndex(of: "{").flatMap { s in raw.lastIndex(of: "}").map { String(raw[s...$0]) } }
-        let obj = json.flatMap { (try? JSONSerialization.jsonObject(with: Data($0.utf8))) as? [String: Any] }
-
-        if let response = obj?["response"] as? String, !response.isEmpty { return parse(response) }
-        let combined = "\(stderr)\n\((obj?["error"] as? [String: Any])?["message"] as? String ?? raw)"
-        if status == 127 || combined.contains("command not found") { throw Failure.cliMissing }
-        if combined.range(of: #"auth|login|credential|GEMINI_API_KEY"#, options: [.regularExpression, .caseInsensitive]) != nil { throw Failure.cliNotLoggedIn }
-        if combined.range(of: #"429|quota|rate limit"#, options: [.regularExpression, .caseInsensitive]) != nil { throw Failure.rateLimited }
-        throw Failure.other("Gemini CLI falló (\(status)): \(combined.trimmingCharacters(in: .whitespacesAndNewlines).suffix(400))")
     }
 }
 
