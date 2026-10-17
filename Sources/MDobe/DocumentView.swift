@@ -108,13 +108,24 @@ struct ThumbnailsView: NSViewRepresentable {
 
 struct AIPanel: View {
     @Bindable var assistant: Assistant
+    @State private var token = ""
 
     var body: some View {
         VStack(spacing: 10) {
             HStack {
                 Label("Asistente", systemImage: "sparkles").font(.headline)
                 Spacer()
-                Text("Apple Intelligence · en tu Mac").font(.caption).foregroundStyle(.secondary)
+                Button("Nueva conversación", systemImage: "square.and.pencil") { assistant.reset() }
+                    .labelStyle(.iconOnly).buttonStyle(.borderless).disabled(assistant.busy)
+            }
+            Picker("Motor", selection: $assistant.provider) {
+                Text("ChatGPT (GPT-4.1)").tag(Assistant.Provider.chatgpt)
+                Text("Apple · sin internet").tag(Assistant.Provider.apple)
+            }
+            .pickerStyle(.segmented).labelsHidden()
+
+            if assistant.provider == .chatgpt, !assistant.connected {
+                connectBox
             }
             if let reason = assistant.unavailableReason {
                 Text(reason).font(.callout).foregroundStyle(.orange).frame(maxWidth: .infinity, alignment: .leading)
@@ -153,6 +164,26 @@ struct AIPanel: View {
             }
         }
         .padding()
+    }
+
+    private var connectBox: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Conectar ChatGPT gratis").font(.subheadline.bold())
+            Text("1. Crea un token en GitHub con el permiso **Models: Read-only** (nada más) y pulsa *Generate token*.")
+                .font(.caption)
+            Link("Abrir GitHub para crear el token", destination: ChatGPT.tokenURL).font(.caption)
+            Text("2. Pégalo aquí. Se guarda en tu Llavero.").font(.caption)
+            HStack {
+                SecureField("github_pat_…", text: $token).textFieldStyle(.roundedBorder)
+                Button("Guardar") {
+                    assistant.connect(token: token)
+                    token = ""
+                }
+                .disabled(token.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .padding(10)
+        .background(.quaternary.opacity(0.5), in: .rect(cornerRadius: 8))
     }
 }
 
