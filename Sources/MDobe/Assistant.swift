@@ -80,7 +80,8 @@ final class Assistant {
         guard !q.isEmpty, !busy else { return }
         input = ""
         run(user: q) { [self] in
-            let context = "\(location)\n\nFragmentos del documento:\n\(relevantText(for: q))"
+            let notes = String(editor.annotationSummary.prefix(provider == .chatgpt ? 6000 : 1200))
+            let context = "\(location)\n\n\(notes)\n\nFragmentos del documento:\n\(relevantText(for: q))"
             switch provider {
             case .chatgpt: try await chatGPTConversation(context: context, question: q)
             case .apple: try await appleStream("\(context)\n\nPetición del usuario: \(q)", tools: true)

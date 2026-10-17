@@ -54,9 +54,14 @@ enum ChatGPT {
             let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
             switch status {
             case 200:
-                let choices = obj?["choices"] as? [[String: Any]]
-                guard let msg = choices?.first?["message"] as? [String: Any] else { throw Failure.server("Respuesta vacía") }
-                return msg
+                let choice = (obj?["choices"] as? [[String: Any]])?.first
+                if let msg = choice?["message"] as? [String: Any], msg["content"] is String || msg["tool_calls"] is [Any] {
+                    return msg
+                }
+                // Sin contenido (p. ej. filtro de contenido): probamos con el otro modelo.
+                lastError = choice?["finish_reason"] as? String == "content_filter"
+                    ? Failure.server("El filtro de contenido de GitHub/Microsoft bloqueó la respuesta. Prueba a reformular o usa Apple.")
+                    : Failure.server("Respuesta vacía de \(model): \(String(decoding: data.prefix(400), as: UTF8.self))")
             case 401, 403:
                 throw Failure.unauthorized
             case 429:
