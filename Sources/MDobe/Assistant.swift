@@ -161,6 +161,21 @@ final class Assistant {
         }
     }
 
+    func explainFormula(_ png: Data, page: Int) {
+        guard provider == .gemini else {
+            return messages.append(.init(role: .info, text: "Para leer fórmulas cambia el asistente a Gemini (Apple no puede ver imágenes)."))
+        }
+        run(user: "Fórmula recuadrada en la página \(page)") { [self] in
+            setLast("Gemini está leyendo la fórmula…")
+            let reply = try await Gemini.askAPI(prompt: """
+                La imagen es un fragmento recuadrado de la página \(page) del PDF. Transcríbelo a LaTeX en un bloque $$...$$ \
+                (si hay varias líneas, usa un entorno aligned). Después explica de forma sencilla qué dice y qué significa cada símbolo.
+                """, pdf: nil, image: png)
+            setLast(reply.text)
+            history.append(("Fórmula de la página \(page)", reply.text))
+        }
+    }
+
     private func apply(_ highlights: [(phrase: String, note: String?)]) -> Int {
         var found = 0
         editor.grouped("Resaltar") {
@@ -205,6 +220,7 @@ final class Assistant {
         Eres el asistente de MDobe, un lector de PDF para Mac. Responde siempre en español, de forma clara y breve.
         Basa tus respuestas en los fragmentos del documento; si algo no aparece, dilo.
         Si el usuario pide resaltar, marcar o anotar algo, usa la herramienta "resaltar" con frases copiadas literalmente de los fragmentos.
+        Escribe las fórmulas en LaTeX: en línea con $...$ y en bloque con $$...$$.
         """
 
     private func appleStream(_ prompt: String, tools: Bool = false) async throws {

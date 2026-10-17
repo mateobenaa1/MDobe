@@ -26,9 +26,10 @@ enum Gemini {
         Eres el asistente de MDobe, un lector y editor de PDF para Mac. Tienes adjunto el PDF que el usuario tiene abierto, \
         incluidas sus anotaciones (resaltados, trazos a mano, notas) tal y como se ven en la página.
         Responde siempre en español, claro y bien estructurado. Puedes usar **negrita** y listas con guiones. \
+        Escribe TODA la matemática en LaTeX: en línea con $...$ y en bloque con $$...$$ (fórmulas importantes o largas en bloque). \
+        Usa notación estándar (\\mathbb{R}, \\frac, \\int, \\sum, \\lim…). Recuerda que dentro del JSON las barras invertidas van escapadas.
         Cuando menciones una página escribe «página N», donde N es el número de página del archivo PDF (la primera página del archivo es la 1); \
         si el número impreso en la página es distinto, puedes añadirlo así: (numerada 5).
-        No uses LaTeX: escribe las fórmulas con símbolos Unicode (α, β, ∈, ≤, ², √, ∑…).
         Devuelve SOLO un objeto JSON: {"respuesta": "texto para el usuario", "resaltar": [{"frase": "texto literal del PDF", "nota": "opcional"}]}.
         Rellena "resaltar" únicamente si el usuario pide resaltar, marcar o anotar algo; cada "frase" debe copiarse literalmente \
         del PDF y ser corta (una oración como mucho). Si no, "resaltar": [].
@@ -59,16 +60,17 @@ enum Gemini {
     static var hasKey: Bool { Keychain.read(account: "gemini-api") != nil }
     static func saveKey(_ k: String) { Keychain.write(k.trimmingCharacters(in: .whitespacesAndNewlines), account: "gemini-api") }
 
-    static func askAPI(prompt: String, pdf: Data) async throws -> Reply {
+    static func askAPI(prompt: String, pdf: Data?, image: Data? = nil) async throws -> Reply {
         guard let key = Keychain.read(account: "gemini-api") else { throw Failure.noKey }
-        guard pdf.count < maxPDFBytes else { throw Failure.tooLarge }
+        guard (pdf?.count ?? 0) < maxPDFBytes else { throw Failure.tooLarge }
+        var parts: [[String: Any]] = []
+        if let pdf { parts.append(["inlineData": ["mimeType": "application/pdf", "data": pdf.base64EncodedString()]]) }
+        if let image { parts.append(["inlineData": ["mimeType": "image/png", "data": image.base64EncodedString()]]) }
+        parts.append(["text": prompt])
         let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent")!
         let body: [String: Any] = [
             "systemInstruction": ["parts": [["text": instructions]]],
-            "contents": [["role": "user", "parts": [
-                ["inlineData": ["mimeType": "application/pdf", "data": pdf.base64EncodedString()]],
-                ["text": prompt],
-            ]]],
+            "contents": [["role": "user", "parts": parts]],
             "generationConfig": ["responseMimeType": "application/json", "temperature": 0.3],
         ]
         var req = URLRequest(url: url, timeoutInterval: 120)
@@ -87,8 +89,8 @@ enum Gemini {
         case 429: throw Failure.rateLimited
         default: throw Failure.other("Error \(status): \(message ?? String(decoding: data.prefix(300), as: UTF8.self))")
         }
-        let parts = (((obj?["candidates"] as? [[String: Any]])?.first?["content"] as? [String: Any])?["parts"] as? [[String: Any]]) ?? []
-        let text = parts.compactMap { $0["text"] as? String }.joined()
+        let outParts = (((obj?["candidates"] as? [[String: Any]])?.first?["content"] as? [String: Any])?["parts"] as? [[String: Any]]) ?? []
+        let text = outParts.compactMap { $0["text"] as? String }.joined()
         guard !text.isEmpty else { throw Failure.other("Gemini no ha devuelto respuesta. Prueba a reformular la pregunta.") }
         return parse(text)
     }

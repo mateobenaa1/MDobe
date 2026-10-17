@@ -31,6 +31,12 @@ struct DocumentView: View {
         .searchable(text: $editor.searchText, placement: .toolbar, prompt: "Buscar en el PDF")
         .onSubmit(of: .search) { editor.submitSearch() }
         .toolbar { toolbar }
+        .onAppear {
+            editor.onFormula = { png, page in
+                showAI = true
+                assistant.explainFormula(png, page: page)
+            }
+        }
         .sheet(isPresented: $editor.showSignaturePad) {
             SignaturePad { editor.tool = .sign }
         }
@@ -172,17 +178,8 @@ struct AIPanel: View {
             .controlSize(.small)
             .disabled(assistant.busy)
 
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 8) {
-                        ForEach(assistant.messages) { MessageRow(message: $0).id($0.id) }
-                    }
-                    .padding(.vertical, 4)
-                }
-                .onChange(of: assistant.messages.last?.text) {
-                    if let id = assistant.messages.last?.id { proxy.scrollTo(id, anchor: .bottom) }
-                }
-            }
+            ChatWebView(messages: assistant.messages, goToPage: assistant.goToPage)
+                .clipShape(.rect(cornerRadius: 6))
 
             HStack(alignment: .bottom) {
                 TextField("Pregunta o pide «resalta las fechas»…", text: $assistant.input, axis: .vertical)
@@ -198,11 +195,6 @@ struct AIPanel: View {
             }
         }
         .padding()
-        .environment(\.openURL, OpenURLAction { url in
-            guard url.scheme == "mdobe", let n = Int(url.lastPathComponent) else { return .systemAction }
-            assistant.goToPage(n)
-            return .handled
-        })
     }
 
     private var keyBox: some View {
@@ -222,35 +214,5 @@ struct AIPanel: View {
         }
         .padding(10)
         .background(.quaternary.opacity(0.5), in: .rect(cornerRadius: 8))
-    }
-}
-
-private struct MessageRow: View {
-    let message: Assistant.Message
-
-    var body: some View {
-        let source = message.role == .ai ? Self.linkPages(message.text) : message.text
-        let text = (try? AttributedString(markdown: source, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(message.text)
-        Group {
-            switch message.role {
-            case .user:
-                Text(text).padding(8).background(.tint.opacity(0.15), in: .rect(cornerRadius: 8))
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-            case .ai:
-                Text(message.text.isEmpty ? AttributedString("…") : text).padding(8)
-                    .background(.quaternary, in: .rect(cornerRadius: 8))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            case .info:
-                Text(text).font(.caption).foregroundStyle(.secondary)
-            }
-        }
-        .textSelection(.enabled)
-    }
-
-    private static let pageRef = try! NSRegularExpression(pattern: #"(?i)\b(p[áa]gina|p[áa]g\.)\s+(\d+)"#)
-
-    /// Convierte «página 8» en un enlace que lleva a esa página.
-    static func linkPages(_ text: String) -> String {
-        pageRef.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "[$0](mdobe://page/$2)")
     }
 }

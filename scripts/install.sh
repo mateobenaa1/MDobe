@@ -7,6 +7,7 @@ APP=build/MDobe.app
 rm -rf "$APP" && mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$(swift build -c release --show-bin-path)/MDobe" "$APP/Contents/MacOS/"
 cp Resources/Info.plist "$APP/Contents/"
+rm -rf "$APP/Contents/Resources/Web" && cp -R Resources/Web "$APP/Contents/Resources/"
 [ -f Resources/AppIcon.icns ] || swift scripts/make-icon.swift Resources/AppIcon.icns
 cp Resources/AppIcon.icns "$APP/Contents/Resources/"
 codesign --force --sign - "$APP"

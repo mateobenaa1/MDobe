@@ -17,7 +17,7 @@ final class MDPDFView: PDFView {
     private var inkPoints: [CGPoint] = []
     private let preview = CAShapeLayer()
 
-    private var drawsShapes: Bool { tool == .ink || tool == .whiteout }
+    private var drawsShapes: Bool { [.ink, .whiteout, .formula].contains(tool) }
 
     override func resetCursorRects() {
         super.resetCursorRects()
@@ -48,7 +48,7 @@ final class MDPDFView: PDFView {
             editor.eraseAnnotation(at: pagePoint, on: page)
         case .sign:
             editor.stampSignature(at: pagePoint, on: page)
-        case .ink, .whiteout:
+        case .ink, .whiteout, .formula:
             dragPage = page
             dragStart = p
             inkPoints = [p]
@@ -95,7 +95,8 @@ final class MDPDFView: PDFView {
         } else {
             let a = convert(dragStart, to: page), b = convert(end, to: page)
             let rect = CGRect(from: a, to: b)
-            if rect.width > 2, rect.height > 2 { editor.addWhiteout(rect, on: page) }
+            guard rect.width > 2, rect.height > 2 else { return }
+            if tool == .formula { editor.captureFormula(rect, on: page) } else { editor.addWhiteout(rect, on: page) }
         }
     }
 
@@ -105,8 +106,8 @@ final class MDPDFView: PDFView {
         preview.lineWidth = tool == .ink ? 2 : 1
         preview.lineCap = .round
         preview.lineJoin = .round
-        preview.strokeColor = tool == .ink ? editor?.nsColor.cgColor : NSColor.systemGray.cgColor
-        preview.fillColor = tool == .ink ? nil : NSColor.white.withAlphaComponent(0.9).cgColor
+        preview.strokeColor = tool == .ink ? editor?.nsColor.cgColor : tool == .formula ? NSColor.systemBlue.cgColor : NSColor.systemGray.cgColor
+        preview.fillColor = tool == .ink ? nil : tool == .formula ? NSColor.systemBlue.withAlphaComponent(0.08).cgColor : NSColor.white.withAlphaComponent(0.9).cgColor
         preview.zPosition = 1000
         layer?.addSublayer(preview)
     }

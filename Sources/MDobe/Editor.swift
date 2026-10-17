@@ -4,7 +4,7 @@ import PDFKit
 import SwiftUI
 
 enum Tool: String, CaseIterable, Identifiable {
-    case select, highlight, underline, strike, note, text, ink, sign, whiteout, eraser
+    case select, highlight, underline, strike, note, text, ink, sign, formula, whiteout, eraser
     var id: Self { self }
 
     var label: String {
@@ -17,6 +17,7 @@ enum Tool: String, CaseIterable, Identifiable {
         case .text: "Texto"
         case .ink: "Dibujar"
         case .sign: "Firmar"
+        case .formula: "Fórmula → LaTeX (recuadra una fórmula)"
         case .whiteout: "Tapar"
         case .eraser: "Borrar anotación"
         }
@@ -32,6 +33,7 @@ enum Tool: String, CaseIterable, Identifiable {
         case .text: "textformat"
         case .ink: "pencil.tip"
         case .sign: "signature"
+        case .formula: "function"
         case .whiteout: "rectangle.fill"
         case .eraser: "eraser"
         }
@@ -51,6 +53,8 @@ final class Editor {
     var showSignaturePad = false
     var ocrStatus: String?
     var suggestOCR = false
+    /// Recibe la imagen PNG de una fórmula recuadrada y su número de página (1…).
+    @ObservationIgnored var onFormula: ((Data, Int) -> Void)?
 
     var searchText = ""
     private(set) var results: [PDFSelection] = []
@@ -255,6 +259,23 @@ final class Editor {
         }
         addInk(path, on: page, color: NSColor(red: 0.05, green: 0.1, blue: 0.4, alpha: 1), width: 1.4)
         undoManager?.setActionName("Firmar")
+    }
+
+    // MARK: Fórmulas
+
+    func captureFormula(_ rect: CGRect, on page: PDFPage) {
+        let scale = min(4, 1600 / max(rect.width, rect.height))
+        let img = NSImage(size: NSSize(width: rect.width * scale, height: rect.height * scale), flipped: false) { bounds in
+            guard let ctx = NSGraphicsContext.current?.cgContext else { return false }
+            NSColor.white.setFill()
+            bounds.fill()
+            ctx.scaleBy(x: scale, y: scale)
+            ctx.translateBy(x: -rect.minX, y: -rect.minY)
+            page.draw(with: .mediaBox, to: ctx)
+            return true
+        }
+        guard let tiff = img.tiffRepresentation, let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) else { return }
+        onFormula?(png, document.index(for: page) + 1)
     }
 
     // MARK: Formularios

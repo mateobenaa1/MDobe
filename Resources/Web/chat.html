@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="katex.min.css">
+<script src="katex.min.js"></script>
+<script src="copy-tex.min.js"></script>
+<script src="marked.min.js"></script>
+<style>
+  :root { color-scheme: light dark; --user: rgba(0,122,255,.14); --ai: rgba(127,127,127,.12); --muted: #888; }
+  html, body { margin: 0; background: transparent; font: 13px -apple-system, system-ui, sans-serif; color: CanvasText; }
+  #log { display: flex; flex-direction: column; gap: 8px; padding: 4px 2px 12px; }
+  .msg { padding: 8px 10px; border-radius: 8px; line-height: 1.45; overflow-wrap: anywhere; }
+  .user { background: var(--user); align-self: flex-end; max-width: 90%; }
+  .ai { background: var(--ai); }
+  .info { font-size: 11px; color: var(--muted); padding: 0 2px; }
+  .msg p { margin: 0 0 .5em; } .msg p:last-child { margin-bottom: 0; }
+  .msg ul, .msg ol { margin: .3em 0; padding-left: 1.3em; }
+  .msg code { font: 12px ui-monospace, Menlo, monospace; background: rgba(127,127,127,.15); padding: 1px 4px; border-radius: 4px; }
+  .msg pre { background: rgba(127,127,127,.15); padding: 8px; border-radius: 6px; overflow-x: auto; }
+  .msg pre code { background: none; padding: 0; }
+  .msg h1, .msg h2, .msg h3 { font-size: 14px; margin: .6em 0 .3em; }
+  .msg table { border-collapse: collapse; } .msg td, .msg th { border: 1px solid rgba(127,127,127,.3); padding: 2px 6px; }
+  .katex { font-size: 1.08em; }
+  .katex-display { margin: .5em 0; overflow-x: auto; overflow-y: hidden; padding: 4px 0; cursor: copy; border-radius: 6px; }
+  .katex-display:hover { background: rgba(127,127,127,.12); }
+  a { color: LinkText; }
+  .typing { color: var(--muted); }
+  #toast { position: fixed; bottom: 8px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,.75); color: #fff;
+           padding: 4px 10px; border-radius: 10px; font-size: 11px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+</style>
+</head>
+<body>
+<div id="log"></div>
+<div id="toast">LaTeX copiado</div>
+<script>
+const log = document.getElementById('log');
+const MATH = /\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)|\$([^\s$](?:[^$\n]*?[^\s$])?)\$/g;
+
+// La matemática se aparta antes de Markdown (que estropearía _ y \) y se vuelve a poner ya renderizada.
+function renderText(text, markdown) {
+  const math = [];
+  let src = text.replace(MATH, (m, d1, d2, i1, i2) => {
+    const display = d1 !== undefined || d2 !== undefined;
+    const tex = (d1 ?? d2 ?? i1 ?? i2).trim();
+    math.push({ tex, display });
+    return `@@M${math.length - 1}@@`;
+  });
+  // «página 8» → enlace a esa página del PDF
+  src = src.replace(/\b(p[áa]gina|p[áa]g\.)\s+(\d+)/gi, (m, w, n) => `[${m}](mdobe://page/${n})`);
+  let html = markdown ? marked.parse(src, { breaks: true }) : escapeHTML(src).replace(/\n/g, '<br>');
+  return html.replace(/@@M(\d+)@@/g, (m, i) => {
+    const { tex, display } = math[+i];
+    const out = katex.renderToString(tex, { displayMode: display, throwOnError: false, output: 'html' });
+    return display ? out.replace('class="katex-display"', `class="katex-display" data-tex="${escapeHTML(tex)}"`) : out;
+  });
+}
+
+function escapeHTML(s) {
+  return s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
+// Llamado desde Swift con la lista completa de mensajes.
+function render(messages) {
+  log.innerHTML = messages.map(m => {
+    if (m.role === 'ai' && !m.text) return '<div class="msg ai typing">…</div>';
+    if (m.role === 'info') return `<div class="info">${renderText(m.text, false)}</div>`;
+    return `<div class="msg ${m.role}">${renderText(m.text, m.role === 'ai')}</div>`;
+  }).join('');
+  scrollTo(0, document.body.scrollHeight);
+}
+
+// Clic en una fórmula en bloque → copiar su LaTeX
+document.addEventListener('click', e => {
+  const block = e.target.closest('.katex-display');
+  if (!block?.dataset.tex) return;
+  window.webkit.messageHandlers.copy.postMessage(block.dataset.tex);
+  const t = document.getElementById('toast');
+  t.style.opacity = 1;
+  setTimeout(() => t.style.opacity = 0, 1200);
+});
+</script>
+</body>
+</html>
