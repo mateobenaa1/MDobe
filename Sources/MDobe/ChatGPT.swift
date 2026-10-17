@@ -5,7 +5,7 @@ import Security
 /// Usa un token de GitHub con permiso solo de "Models", guardado en el Llavero.
 enum ChatGPT {
     static let models = ["openai/gpt-4.1", "openai/gpt-4.1-mini"]
-    static let tokenURL = URL(string: "https://github.com/settings/personal-access-tokens/new?name=MDobe&description=ChatGPT+en+MDobe&expires_in=none&models=read&user_models=read")!
+    static let tokenURL = URL(string: "https://github.com/settings/personal-access-tokens/new?name=MDobe&description=ChatGPT+en+MDobe")!
     private static let endpoint = URL(string: "https://models.github.ai/inference/chat/completions")!
     private static var cachedToken: String?
 
