@@ -157,6 +157,9 @@ struct MDobePadApp: App {
         WindowGroup {
             PadRootView(library: library)
                 .onOpenURL { library.open($0) } // «Abrir con MDobe» desde Archivos u OneDrive
+                #if DEBUG
+                .task { if let path = ProcessInfo.processInfo.environment["MDOBE_OPEN"] { library.open(URL(fileURLWithPath: path)) } }
+                #endif
                 .onChange(of: phase) {
                     if phase != .active, let doc = library.current { Task { await doc.save() } }
                 }

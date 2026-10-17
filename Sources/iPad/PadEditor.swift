@@ -31,6 +31,7 @@ final class PadEditor {
     let document: PDFDocument
     let pdfView = PDFView()
     @ObservationIgnored private let pencil = PencilLayer()
+    @ObservationIgnored private let ink = InkOverlay()
     @ObservationIgnored private var tap: UITapGestureRecognizer?
     @ObservationIgnored private var tapHandler: TapHandler?
     var undoManager: UndoManager?
@@ -48,11 +49,20 @@ final class PadEditor {
     init(document: PDFDocument) {
         self.document = document
         pencil.editor = self
+        // Las capas de tinta tienen que configurarse ANTES de cargar el documento.
+        ink.pdfView = pdfView
+        pdfView.pageOverlayViewProvider = ink
         pdfView.autoScales = true
         pdfView.displayMode = .singlePageContinuous
         pdfView.displayDirection = .vertical
         pdfView.document = document
         SmoothInk.adopt(in: document)
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["MDOBE_TEST_INK"] != nil, let page = document.page(at: 0) {
+            let pts = (0..<200).map { i in CGPoint(x: 150 + Double(i) * 1.2, y: 650 + 25 * sin(Double(i) / 12)) }
+            addInk(pts, widths: pts.indices.map { 0.8 + 1.2 * abs(sin(Double($0) / 20)) }, color: .black, on: page)
+        }
+        #endif
 
         let handler = TapHandler { [weak self] g in self?.tapped(g) }
         let tap = UITapGestureRecognizer(target: handler, action: #selector(TapHandler.fire(_:)))
@@ -61,6 +71,9 @@ final class PadEditor {
         self.tap = tap
         tapHandler = handler
 
+        NotificationCenter.default.addObserver(forName: .PDFViewScaleChanged, object: pdfView, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.ink.zoomChanged() }
+        }
         NotificationCenter.default.addObserver(forName: .PDFViewSelectionChanged, object: pdfView, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
@@ -86,11 +99,13 @@ final class PadEditor {
     func add(_ a: PDFAnnotation, to page: PDFPage) {
         a.shouldPrint = true
         page.addAnnotation(a)
+        if a is SmoothInk { ink.render(page) }
         undoManager?.registerUndo(withTarget: self) { $0.remove(a, from: page) }
     }
 
     func remove(_ a: PDFAnnotation, from page: PDFPage) {
         page.removeAnnotation(a)
+        if a is SmoothInk { ink.render(page) }
         undoManager?.registerUndo(withTarget: self) { $0.add(a, to: page) }
     }
 
@@ -111,29 +126,36 @@ final class PadEditor {
                       let page = pdfView.page(for: pdfView.convert(start, from: canvas), nearest: true) else { continue }
                 let toPage = { (p: CGPoint) in self.pdfView.convert(self.pdfView.convert(p, from: canvas), to: page) }
                 let marker = stroke.ink.inkType == .marker
-                let points = stroke.path.interpolatedPoints(by: .distance(marker ? 3 : 1.2)).map { toPage($0.location.applying(stroke.transform)) }
-                let sizes = stroke.path.map(\.size.width)
-                let width = max(0.6, (sizes.reduce(0, +) / CGFloat(max(sizes.count, 1))) * unit * (marker ? 1 : 0.85))
+                let samples = Array(stroke.path.interpolatedPoints(by: .distance(marker ? 3 : 1)))
+                let points = samples.map { toPage($0.location.applying(stroke.transform)) }
+                let widths = samples.map { max(0.3, $0.size.width * unit) } // grosor real de cada punto (presión)
                 let color = stroke.ink.color.resolvedColor(with: UITraitCollection(userInterfaceStyle: .light))
-                if marker { addMarker(points, width: width, color: color, on: page) } else { addInk(points, width: width, color: color, on: page) }
+                if marker {
+                    addMarker(points, width: widths.reduce(0, +) / CGFloat(max(widths.count, 1)), color: color, on: page)
+                } else {
+                    addInk(points, widths: widths, color: color, on: page)
+                }
             }
         }
     }
 
-    private func addInk(_ pts: [CGPoint], width: CGFloat, color: UIColor, on page: PDFPage) {
+    private func addInk(_ pts: [CGPoint], widths: [CGFloat], color: UIColor, on page: PDFPage) {
         guard var first = pts.first else { return }
         let points = pts.count > 1 ? pts : [first, CGPoint(x: first.x + 0.3, y: first.y)] // un toque = un punto
+        let widths = pts.count > 1 ? widths : [widths.first ?? 1, widths.first ?? 1]
+        let width = widths.reduce(0, +) / CGFloat(max(widths.count, 1))
         first = points[0]
         let path = UIBezierPath()
         path.move(to: first)
         points.dropFirst().forEach { path.addLine(to: $0) }
-        let bounds = path.bounds.insetBy(dx: -width * 2, dy: -width * 2)
+        let bounds = path.bounds.insetBy(dx: -(widths.max() ?? width) * 2, dy: -(widths.max() ?? width) * 2)
         path.apply(CGAffineTransform(translationX: -bounds.minX, y: -bounds.minY))
         let a = SmoothInk(bounds: bounds, forType: .ink, withProperties: nil)
         a.add(path)
         a.color = color
         a.border = PDFBorder()
         a.border?.lineWidth = width
+        a.setValue(widths.map { String(format: "%.2f", $0) }.joined(separator: ","), forAnnotationKey: InkOverlay.widthsKey)
         add(a, to: page)
     }
 
@@ -362,6 +384,7 @@ final class PencilLayer: NSObject, PKCanvasViewDelegate {
 /// En el archivo se guarda como una anotación de tinta normal.
 final class SmoothInk: PDFAnnotation {
     override func draw(with box: PDFDisplayBox, in context: CGContext) {
+        if page?.rotation == 0 { return } // la dibuja InkOverlay con PencilKit
         guard let paths, !paths.isEmpty else { return super.draw(with: box, in: context) }
         UIGraphicsPushContext(context)
         context.saveGState()
@@ -391,6 +414,7 @@ final class SmoothInk: PDFAnnotation {
                 new.border = old.border
                 new.contents = old.contents
                 new.shouldPrint = old.shouldPrint
+                if let w = old.value(forAnnotationKey: InkOverlay.widthsKey) { new.setValue(w, forAnnotationKey: InkOverlay.widthsKey) }
                 page.removeAnnotation(old)
                 page.addAnnotation(new)
             }
