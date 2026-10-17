@@ -1,0 +1,20 @@
+:root { --bg: #2b2b2b; --bar: #1e1e1e; --fg: #eee; --accent: #b3261e; }
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 14px -apple-system, system-ui, sans-serif; }
+body { display: flex; flex-direction: column; }
+#toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px; padding-top: max(8px, env(safe-area-inset-top)); background: var(--bar); position: sticky; top: 0; z-index: 10; }
+.brand { color: #ff6b5e; margin-right: 6px; }
+button, .btn { background: #3a3a3a; color: var(--fg); border: 0; border-radius: 6px; padding: 6px 10px; font: inherit; cursor: pointer; min-width: 34px; min-height: 34px; display: inline-flex; align-items: center; justify-content: center; }
+button:disabled { opacity: .4; }
+button.active { background: var(--accent); }
+.sep { width: 1px; height: 22px; background: #444; }
+#tools { display: flex; gap: 4px; }
+#color { width: 34px; height: 34px; border: 0; padding: 0; background: none; }
+#docName { margin-left: auto; opacity: .7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 30vw; }
+#viewer { flex: 1; overflow: auto; padding: 16px; display: flex; flex-direction: column; align-items: center; gap: 16px; -webkit-overflow-scrolling: touch; }
+.empty { opacity: .6; margin-top: 30vh; }
+.page { position: relative; background: #fff; box-shadow: 0 2px 10px #0008; }
+.page canvas { display: block; }
+.page canvas.overlay { position: absolute; inset: 0; touch-action: pan-x pan-y; }
+#viewer[data-tool]:not([data-tool="none"]) .overlay { touch-action: none; cursor: crosshair; }
+#viewer.drag { outline: 3px dashed var(--accent); outline-offset: -8px; }
