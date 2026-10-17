@@ -119,13 +119,16 @@ struct AIPanel: View {
                     .labelStyle(.iconOnly).buttonStyle(.borderless).disabled(assistant.busy)
             }
             Picker("Motor", selection: $assistant.provider) {
-                Text("ChatGPT (GPT-4.1)").tag(Assistant.Provider.chatgpt)
-                Text("Apple · sin internet").tag(Assistant.Provider.apple)
+                ForEach(Assistant.Provider.allCases) { Text($0.label).tag($0) }
             }
             .pickerStyle(.segmented).labelsHidden()
 
-            if assistant.provider == .chatgpt, !assistant.connected {
-                connectBox
+            if assistant.provider == .geminiKey, !assistant.hasKey {
+                keyBox
+            }
+            if assistant.provider == .geminiAccount {
+                Text("Usa tu cuenta de Google mediante Gemini CLI. Si te pide iniciar sesión: abre Terminal, escribe «gemini», elige «Login with Google» y luego /quit.")
+                    .font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
             }
             if let reason = assistant.unavailableReason {
                 Text(reason).font(.callout).foregroundStyle(.orange).frame(maxWidth: .infinity, alignment: .leading)
@@ -166,17 +169,16 @@ struct AIPanel: View {
         .padding()
     }
 
-    private var connectBox: some View {
+    private var keyBox: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Conectar ChatGPT gratis").font(.subheadline.bold())
-            Text("1. Crea un token en GitHub con el permiso **Models: Read-only** (nada más) y pulsa *Generate token*.")
-                .font(.caption)
-            Link("Abrir GitHub para crear el token", destination: ChatGPT.tokenURL).font(.caption)
-            Text("2. Pégalo aquí. Se guarda en tu Llavero.").font(.caption)
+            Text("Conectar Gemini gratis").font(.subheadline.bold())
+            Text("1. Entra con tu cuenta de Google y pulsa **Create API key**.").font(.caption)
+            Link("Abrir Google AI Studio", destination: Gemini.keyURL).font(.caption)
+            Text("2. Pega la clave aquí. Se guarda en tu Llavero.").font(.caption)
             HStack {
-                SecureField("github_pat_…", text: $token).textFieldStyle(.roundedBorder)
+                SecureField("AIza…", text: $token).textFieldStyle(.roundedBorder)
                 Button("Guardar") {
-                    assistant.connect(token: token)
+                    assistant.saveKey(token)
                     token = ""
                 }
                 .disabled(token.trimmingCharacters(in: .whitespaces).isEmpty)

@@ -3,8 +3,9 @@ import FoundationModels
 import Observation
 import PDFKit
 
-/// Asistente del PDF con dos motores gratuitos:
-/// - ChatGPT (GPT-4.1 vía GitHub Models): el más listo, con límite diario gratuito.
+/// Asistente del PDF con tres motores gratuitos:
+/// - Gemini con la cuenta de Google del usuario (Gemini CLI, usa su plan).
+/// - Gemini con clave gratuita de AI Studio.
 /// - Apple Intelligence: local y sin límites, pero con poca memoria de contexto.
 @MainActor @Observable
 final class Assistant {
@@ -16,34 +17,37 @@ final class Assistant {
     }
 
     enum Provider: String, CaseIterable, Identifiable {
-        case chatgpt = "ChatGPT", apple = "Apple"
+        case geminiAccount, geminiKey, apple
         var id: Self { self }
+        var label: String {
+            switch self {
+            case .geminiAccount: "Gemini · tu cuenta"
+            case .geminiKey: "Gemini · gratis"
+            case .apple: "Apple"
+            }
+        }
+        var usesGemini: Bool { self != .apple }
     }
 
     var messages: [Message] = []
     var input = ""
     private(set) var busy = false
-    private(set) var connected = ChatGPT.hasToken
+    private(set) var hasKey = Gemini.hasKey
     var provider: Provider {
-        didSet {
-            UserDefaults.standard.set(provider.rawValue, forKey: "assistant.provider")
-            history = []
-        }
+        didSet { UserDefaults.standard.set(provider.rawValue, forKey: "assistant.provider") }
     }
 
     private let editor: Editor
-    private var history: [[String: Any]] = [] // turnos anteriores (solo ChatGPT)
-    private var appleBudget = 6000 // se reduce si el modelo de Apple se queda corto
-    /// Caracteres de documento por petición (GitHub Models gratis admite ~8000 tokens de entrada).
-    private var budget: Int { provider == .chatgpt ? 22000 : appleBudget }
+    private var history: [(user: String, model: String)] = []
+    private var appleBudget = 6000 // caracteres por petición; se reduce si el modelo de Apple se queda corto
 
     init(editor: Editor) {
         self.editor = editor
-        provider = Provider(rawValue: UserDefaults.standard.string(forKey: "assistant.provider") ?? "") ?? .chatgpt
+        provider = Provider(rawValue: UserDefaults.standard.string(forKey: "assistant.provider") ?? "") ?? .geminiAccount
     }
 
     var unavailableReason: String? {
-        if provider == .chatgpt { return nil } // la falta de token se resuelve en el propio panel
+        guard provider == .apple else { return nil }
         switch SystemLanguageModel.default.availability {
         case .available: return nil
         case .unavailable(.appleIntelligenceNotEnabled): return "Activa Apple Intelligence en Ajustes del Sistema → Apple Intelligence y Siri."
@@ -53,21 +57,15 @@ final class Assistant {
         }
     }
 
-    func connect(token: String) {
-        ChatGPT.saveToken(token)
-        connected = ChatGPT.hasToken
+    func saveKey(_ key: String) {
+        Gemini.saveKey(key)
+        hasKey = Gemini.hasKey
     }
 
     func reset() {
         messages = []
         history = []
     }
-
-    private static let instructions = """
-        Eres el asistente de MDobe, un lector y editor de PDF para Mac. Responde siempre en español, de forma clara y bien estructurada.
-        Basa tus respuestas en el documento; si algo no aparece en los fragmentos que tienes, dilo.
-        Si el usuario pide resaltar, marcar o anotar algo, usa la herramienta "resaltar" con frases copiadas literalmente del documento (una llamada por frase).
-        """
 
     private var location: String {
         "El usuario está viendo la página \(editor.currentPageIndex + 1) de \(editor.document.pageCount)."
@@ -79,28 +77,28 @@ final class Assistant {
         let q = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty, !busy else { return }
         input = ""
+        if provider.usesGemini { return askGemini(q, shown: q) }
         run(user: q) { [self] in
-            let notes = String(editor.annotationSummary.prefix(provider == .chatgpt ? 6000 : 1200))
-            let context = "\(location)\n\n\(notes)\n\nFragmentos del documento:\n\(relevantText(for: q))"
-            switch provider {
-            case .chatgpt: try await chatGPTConversation(context: context, question: q)
-            case .apple: try await appleStream("\(context)\n\nPetición del usuario: \(q)", tools: true)
-            }
+            let notes = String(editor.annotationSummary.prefix(1200))
+            try await appleStream("\(location)\n\n\(notes)\n\nFragmentos del documento:\n\(relevantText(for: q))\n\nPetición del usuario: \(q)", tools: true)
         }
     }
 
     func summarize() {
+        if provider.usesGemini {
+            return askGemini("Resume el documento: un párrafo corto y después los puntos clave en una lista.", shown: "Resume el documento")
+        }
         run(user: "Resume el documento") { [self] in
             let chunks = chunked(editor.pageTexts)
             let final = "Resume este documento: un párrafo corto y después los puntos clave en una lista."
-            guard chunks.count > 1 else { return try await answer("\(final)\n\n\(chunks.first ?? "")") }
+            guard chunks.count > 1 else { return try await appleStream("\(final)\n\n\(chunks.first ?? "")") }
             // Documento largo: resumimos por partes y luego unimos.
             var partials: [String] = []
             for (i, chunk) in chunks.enumerated() {
                 setLast("Leyendo parte \(i + 1) de \(chunks.count)…")
-                partials.append(try await oneShot("Resume en 3-6 puntos breves:\n\n\(chunk)"))
+                partials.append(try await LanguageModelSession(instructions: Self.appleInstructions).respond(to: "Resume en 3-6 puntos breves:\n\n\(chunk)").content)
             }
-            try await answer("Estos son resúmenes parciales de un documento, en orden. \(final)\n\n\(partials.joined(separator: "\n\n"))")
+            try await appleStream("Estos son resúmenes parciales de un documento, en orden. \(final)\n\n\(partials.joined(separator: "\n\n"))")
         }
     }
 
@@ -108,9 +106,9 @@ final class Assistant {
         guard let sel = editor.pdfView.currentSelection?.string?.trimmingCharacters(in: .whitespacesAndNewlines), !sel.isEmpty else {
             return messages.append(.init(role: .info, text: "Selecciona primero un texto en el PDF (herramienta Seleccionar)."))
         }
-        run(user: "Explica la selección") { [self] in
-            try await answer("Explica de forma sencilla este fragmento de un documento:\n\n\(String(sel.prefix(budget)))")
-        }
+        let ask = "Explica de forma sencilla este fragmento del documento:\n\n\(sel.prefix(appleBudget))"
+        if provider.usesGemini { return askGemini(ask, shown: "Explica la selección") }
+        run(user: "Explica la selección") { [self] in try await appleStream(ask) }
     }
 
     @Generable
@@ -120,41 +118,64 @@ final class Assistant {
     }
 
     func highlightKeyIdeas() {
+        let page = editor.currentPageIndex + 1
+        if provider.usesGemini {
+            return askGemini("Resalta las 3-6 ideas clave de la página \(page) y explica brevemente por qué son importantes.", shown: "Resalta las ideas clave de esta página")
+        }
         run(user: "Resalta las ideas clave de esta página") { [self] in
-            let text = String(editor.pageTexts[editor.currentPageIndex].prefix(budget))
+            let text = String(editor.pageTexts[page - 1].prefix(appleBudget))
             guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 return setLast("Esta página no tiene texto seleccionable (puede ser una imagen escaneada).")
             }
             setLast("Analizando la página…")
-            let phrases: [String]
-            switch provider {
-            case .apple:
-                let s = LanguageModelSession(instructions: Self.instructions)
-                phrases = try await s.respond(to: "Elige las frases más importantes de este texto:\n\n\(text)", generating: KeyPhrases.self).content.phrases
-            case .chatgpt:
-                let msg = try await ChatGPT.complete([
-                    ["role": "system", "content": Self.instructions],
-                    ["role": "user", "content": "Devuelve JSON {\"frases\": [...]} con las 3-6 frases más importantes de este texto, copiadas literalmente y completas:\n\n\(text)"],
-                ], json: true)
-                let data = Data((msg["content"] as? String ?? "{}").utf8)
-                phrases = ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["frases"] as? [String] ?? []
-            }
-            var found = 0
-            editor.grouped("Resaltar ideas clave") {
-                for p in phrases where editor.highlight(text: p) { found += 1 }
-            }
+            let s = LanguageModelSession(instructions: Self.appleInstructions)
+            let phrases = try await s.respond(to: "Elige las frases más importantes de este texto:\n\n\(text)", generating: KeyPhrases.self).content.phrases
+            let found = apply(phrases.map { ($0, nil) })
             setLast(found > 0 ? "He resaltado \(found) ideas clave. ⌘Z para deshacer." : "No he podido localizar las frases en el PDF.")
         }
     }
 
-    // MARK: Motores
+    // MARK: Gemini
+
+    private func askGemini(_ question: String, shown: String) {
+        run(user: shown) { [self] in
+            guard let pdf = editor.document.dataRepresentation() else { throw Gemini.Failure.other("No se pudo leer el PDF.") }
+            setLast("Gemini está leyendo el PDF…")
+            var prompt = "\(location)\n\(editor.annotationSummary)\n\n"
+            if !history.isEmpty {
+                prompt += "Conversación anterior:\n" + history.suffix(4).map { "Usuario: \($0.user)\nAsistente: \($0.model)" }.joined(separator: "\n\n") + "\n\n"
+            }
+            prompt += "Petición del usuario: \(question)"
+
+            let reply = provider == .geminiAccount
+                ? try await Gemini.askCLI(prompt: prompt, pdf: pdf)
+                : try await Gemini.askAPI(prompt: prompt, pdf: pdf)
+            let found = apply(reply.highlights)
+            var text = reply.text
+            if !reply.highlights.isEmpty {
+                text += found > 0 ? "\n\n✓ \(found) resaltados en el PDF (⌘Z para deshacer)." : "\n\n(No he podido localizar en el PDF las frases a resaltar.)"
+            }
+            setLast(text)
+            history.append((question, reply.text))
+        }
+    }
+
+    private func apply(_ highlights: [(phrase: String, note: String?)]) -> Int {
+        var found = 0
+        editor.grouped("Resaltar") {
+            for h in highlights where editor.highlight(text: h.phrase, note: h.note) { found += 1 }
+        }
+        return found
+    }
+
+    // MARK: Motor común
 
     private func run(user: String, _ body: @escaping () async throws -> Void) {
         if let reason = unavailableReason {
             return messages.append(.init(role: .info, text: reason))
         }
-        if provider == .chatgpt, !connected {
-            return messages.append(.init(role: .info, text: ChatGPT.Failure.noToken.localizedDescription))
+        if provider == .geminiKey, !hasKey {
+            return messages.append(.init(role: .info, text: Gemini.Failure.noKey.localizedDescription))
         }
         messages.append(.init(role: .user, text: user))
         messages.append(.init(role: .ai, text: ""))
@@ -165,86 +186,11 @@ final class Assistant {
                 try await body()
             } catch LanguageModelSession.GenerationError.exceededContextWindowSize {
                 appleBudget = max(1500, appleBudget / 2)
-                setLast("El texto era demasiado largo para Apple Intelligence. He reducido el tamaño; vuelve a intentarlo (o usa ChatGPT).")
-            } catch ChatGPT.Failure.unauthorized {
-                connected = false // vuelve a mostrar la caja para conectar
-                setLast(ChatGPT.Failure.unauthorized.localizedDescription)
+                setLast("El texto era demasiado largo para Apple Intelligence. He reducido el tamaño; vuelve a intentarlo (o usa Gemini).")
             } catch {
                 setLast("No he podido responder: \(error.localizedDescription)")
             }
         }
-    }
-
-    /// Respuesta final visible para el usuario (sin historial).
-    private func answer(_ prompt: String) async throws {
-        switch provider {
-        case .apple: try await appleStream(prompt)
-        case .chatgpt: setLast(try await oneShot(prompt))
-        }
-    }
-
-    /// Respuesta de una sola petición, sin herramientas.
-    private func oneShot(_ prompt: String) async throws -> String {
-        switch provider {
-        case .apple:
-            return try await LanguageModelSession(instructions: Self.instructions).respond(to: prompt).content
-        case .chatgpt:
-            let msg = try await ChatGPT.complete([["role": "system", "content": Self.instructions], ["role": "user", "content": prompt]])
-            return msg["content"] as? String ?? ""
-        }
-    }
-
-    private func appleStream(_ prompt: String, tools: Bool = false) async throws {
-        let session = tools
-            ? LanguageModelSession(tools: [HighlightTool(editor: editor)], instructions: Self.instructions)
-            : LanguageModelSession(instructions: Self.instructions)
-        for try await snapshot in session.streamResponse(to: prompt) {
-            setLast(snapshot.content)
-        }
-    }
-
-    private static let chatTools: [[String: Any]] = [[
-        "type": "function",
-        "function": [
-            "name": "resaltar",
-            "description": "Resalta en el PDF una frase del documento y, opcionalmente, le añade una nota.",
-            "parameters": [
-                "type": "object",
-                "properties": [
-                    "frase": ["type": "string", "description": "Frase copiada literalmente del documento (como mucho una oración)"],
-                    "nota": ["type": "string", "description": "Nota opcional junto a la frase"],
-                ],
-                "required": ["frase"],
-            ],
-        ],
-    ]]
-
-    /// Conversación con memoria de los últimos turnos y uso de herramientas.
-    private func chatGPTConversation(context: String, question: String) async throws {
-        var msgs: [[String: Any]] = [["role": "system", "content": "\(Self.instructions)\n\n\(context)"]]
-        msgs += history.suffix(6)
-        msgs.append(["role": "user", "content": question])
-        var marked = 0
-        for _ in 0..<4 {
-            let reply = try await ChatGPT.complete(msgs, tools: Self.chatTools)
-            guard let calls = reply["tool_calls"] as? [[String: Any]], !calls.isEmpty else {
-                let text = reply["content"] as? String ?? ""
-                setLast(marked > 0 ? "\(text)\n\n✓ \(marked) frases resaltadas (⌘Z para deshacer)." : text)
-                history += [["role": "user", "content": question], ["role": "assistant", "content": text]]
-                return
-            }
-            msgs.append(reply)
-            setLast("Resaltando en el PDF…")
-            for call in calls {
-                let fn = call["function"] as? [String: Any]
-                let args = (try? JSONSerialization.jsonObject(with: Data((fn?["arguments"] as? String ?? "{}").utf8))) as? [String: Any]
-                let note = (args?["nota"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-                let ok = editor.highlight(text: args?["frase"] as? String ?? "", note: note)
-                if ok { marked += 1 }
-                msgs.append(["role": "tool", "tool_call_id": call["id"] as? String ?? "", "content": ok ? "Resaltado." : "No encontré esa frase exacta en el PDF."])
-            }
-        }
-        setLast("He hecho \(marked) cambios.")
     }
 
     private func setLast(_ text: String) {
@@ -252,7 +198,22 @@ final class Assistant {
         messages[messages.count - 1].text = text
     }
 
-    // MARK: Contexto
+    // MARK: Apple Intelligence
+
+    private static let appleInstructions = """
+        Eres el asistente de MDobe, un lector de PDF para Mac. Responde siempre en español, de forma clara y breve.
+        Basa tus respuestas en los fragmentos del documento; si algo no aparece, dilo.
+        Si el usuario pide resaltar, marcar o anotar algo, usa la herramienta "resaltar" con frases copiadas literalmente de los fragmentos.
+        """
+
+    private func appleStream(_ prompt: String, tools: Bool = false) async throws {
+        let session = tools
+            ? LanguageModelSession(tools: [HighlightTool(editor: editor)], instructions: Self.appleInstructions)
+            : LanguageModelSession(instructions: Self.appleInstructions)
+        for try await snapshot in session.streamResponse(to: prompt) {
+            setLast(snapshot.content)
+        }
+    }
 
     /// La página actual primero y después las páginas que más palabras comparten con la pregunta.
     private func relevantText(for question: String) -> String {
@@ -267,8 +228,8 @@ final class Assistant {
         var out = ""
         for i in ranked {
             let piece = "[Página \(i + 1)]\n\(pages[i])\n\n"
-            if out.count + piece.count > budget {
-                if out.isEmpty { out = String(piece.prefix(budget)) }
+            if out.count + piece.count > appleBudget {
+                if out.isEmpty { out = String(piece.prefix(appleBudget)) }
                 break
             }
             out += piece
@@ -284,11 +245,11 @@ final class Assistant {
     private func chunked(_ pages: [String]) -> [String] {
         var chunks: [String] = [], current = ""
         for text in pages where !text.isEmpty {
-            if current.count + text.count > budget, !current.isEmpty {
+            if current.count + text.count > appleBudget, !current.isEmpty {
                 chunks.append(current)
                 current = ""
             }
-            current += String(text.prefix(budget)) + "\n\n"
+            current += String(text.prefix(appleBudget)) + "\n\n"
         }
         if !current.isEmpty { chunks.append(current) }
         return chunks
