@@ -24,7 +24,8 @@ struct PadDocumentView: View {
         @Bindable var editor = editor
         VStack(spacing: 0) {
             PDFRepresentable(view: editor.pdfView)
-            if showThumbs {
+                .ignoresSafeArea(edges: editor.immersive ? .all : [])
+            if showThumbs, !editor.immersive {
                 ThumbnailStrip(pdfView: editor.pdfView).frame(height: 92)
             }
         }
@@ -67,6 +68,9 @@ struct PadDocumentView: View {
                 Button("Asistente", systemImage: "sparkles") { showAI.toggle() }
             }
         }
+        .toolbar(editor.immersive ? .hidden : .visible, for: .navigationBar)
+        .statusBarHidden(editor.immersive)
+        .animation(.easeInOut(duration: 0.2), value: editor.immersive)
         .searchable(text: $editor.searchText, prompt: "Buscar en el PDF")
         .onSubmit(of: .search) { editor.submitSearch() }
         .inspector(isPresented: $showAI) {
@@ -83,7 +87,7 @@ struct PadDocumentView: View {
         .navigationTitle(doc.name)
         .navigationBarTitleDisplayMode(.inline)
         .overlay(alignment: .bottomTrailing) {
-            if let status = doc.status {
+            if let status = doc.status, !editor.immersive || status.hasPrefix("No se pudo") {
                 Text(status).font(.caption).padding(6).background(.regularMaterial, in: Capsule()).padding(8)
             }
         }

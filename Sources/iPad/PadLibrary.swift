@@ -133,6 +133,8 @@ final class OpenDoc: Identifiable {
         do {
             try await Task.detached { try PadLibrary.coordinatedWrite(data, to: url) }.value
             status = "Guardado"
+            try? await Task.sleep(for: .seconds(2))
+            if status == "Guardado" { status = nil }
         } catch {
             dirty = true
             status = "No se pudo guardar: \(error.localizedDescription)"

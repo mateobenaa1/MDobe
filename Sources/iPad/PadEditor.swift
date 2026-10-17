@@ -39,6 +39,9 @@ final class PadEditor {
     var undoManager: UndoManager?
 
     var mode: PadMode = .read { didSet { applyMode() } }
+    /// Pantalla completa: solo el PDF, sin barras (se alterna tocando con un dedo).
+    var immersive = false
+    @ObservationIgnored private var chromeTap: UITapGestureRecognizer?
     private(set) var hasSelection = false
     var showTextPrompt = false
     @ObservationIgnored private var textTarget: (point: CGPoint, page: PDFPage)?
@@ -79,6 +82,16 @@ final class PadEditor {
         pdfView.addGestureRecognizer(pan)
         eraserPan = pan
         handler.onPan = { [weak self] g in self?.eraseDrag(g) }
+        // Un toque con el dedo muestra/oculta las barras (esperando a que no sea un doble toque de zoom).
+        let chrome = UITapGestureRecognizer(target: handler, action: #selector(TapHandler.chrome(_:)))
+        chrome.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
+        pdfView.addGestureRecognizer(chrome)
+        chromeTap = chrome
+        handler.onChrome = { [weak self] in
+            guard let self, !hasSelection else { return }
+            immersive.toggle()
+        }
+        applyMode()
 
         NotificationCenter.default.addObserver(forName: .PDFViewScaleChanged, object: pdfView, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.ink.zoomChanged() }
@@ -95,6 +108,8 @@ final class PadEditor {
         pencil.setActive(mode == .pencil, over: pdfView)
         tap?.isEnabled = mode == .text || mode == .erase
         eraserPan?.isEnabled = mode == .erase
+        chromeTap?.isEnabled = mode == .read || mode == .pencil
+        if let chromeTap { for g in Self.doubleTaps(in: pdfView) { chromeTap.require(toFail: g) } }
         // Doble toque = zoom solo en Leer; escribiendo o borrando molesta.
         for g in Self.doubleTaps(in: pdfView) where g !== tap { g.isEnabled = mode == .read }
         // Al borrar, el Pencil no desplaza el PDF (lo hace el dedo).
@@ -444,6 +459,8 @@ final class PadEditor {
 private final class TapHandler: NSObject {
     let action: (UITapGestureRecognizer) -> Void
     var onPan: ((UIPanGestureRecognizer) -> Void)?
+    var onChrome: (() -> Void)?
+    @objc func chrome(_ g: UITapGestureRecognizer) { onChrome?() }
     init(_ action: @escaping (UITapGestureRecognizer) -> Void) { self.action = action }
     @objc func fire(_ g: UITapGestureRecognizer) { action(g) }
     @objc func pan(_ g: UIPanGestureRecognizer) { onPan?(g) }
