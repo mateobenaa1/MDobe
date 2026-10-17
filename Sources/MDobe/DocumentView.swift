@@ -119,6 +119,17 @@ struct DocumentView: View {
                 ForEach(PageFactory.Paper.allCases, id: \.self) { paper in
                     Button("Página en blanco: \(paper.rawValue)") { editor.insertBlankPage(paper) }
                 }
+                Divider()
+                Menu("Margen para apuntes (esta página)") {
+                    ForEach(PageFactory.Paper.allCases, id: \.self) { paper in
+                        Button(paper.rawValue.capitalized) { editor.addNotesMargin(paper, allPages: false) }
+                    }
+                }
+                Menu("Margen para apuntes (todas las páginas)") {
+                    ForEach(PageFactory.Paper.allCases, id: \.self) { paper in
+                        Button(paper.rawValue.capitalized) { editor.addNotesMargin(paper, allPages: true) }
+                    }
+                }
             }
         }
         ToolbarItem {

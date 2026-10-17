@@ -43,4 +43,23 @@ enum PageFactory {
             ctx.strokePath()
         }
     }
+
+    /// Copia de la página con espacio extra a la derecha para tomar apuntes junto al contenido.
+    static func withMargin(_ page: PDFPage, paper: Paper, fraction: CGFloat = 0.6) -> PDFPage? {
+        guard page.rotation == 0, let ref = page.pageRef else { return nil }
+        let media = ref.getBoxRect(.mediaBox), crop = page.bounds(for: .cropBox)
+        let margin = CGRect(x: crop.maxX, y: crop.minY, width: crop.width * fraction, height: crop.height)
+        let box = CGRect(x: media.minX, y: media.minY, width: max(media.maxX, margin.maxX) - media.minX, height: media.height)
+        let new = compose(box: box) { ctx in
+            drawPaper(paper, in: margin, ctx)
+            ctx.drawPDFPage(ref)
+            ctx.setStrokeColor(CGColor(gray: 0.75, alpha: 1)) // separación entre la página y el margen
+            ctx.setLineWidth(0.6)
+            ctx.move(to: CGPoint(x: margin.minX, y: margin.minY))
+            ctx.addLine(to: CGPoint(x: margin.minX, y: margin.maxY))
+            ctx.strokePath()
+        }
+        new?.setBounds(crop.union(margin), for: .cropBox)
+        return new
+    }
 }

@@ -47,6 +47,17 @@ struct PadDocumentView: View {
                         Button("Página en blanco: \(paper.rawValue)") { editor.insertBlankPage(paper) }
                     }
                     Divider()
+                    Menu("Margen para apuntes en esta página") {
+                        ForEach(PageFactory.Paper.allCases, id: \.self) { paper in
+                            Button(paper.rawValue.capitalized) { editor.addNotesMargin(paper, allPages: false) }
+                        }
+                    }
+                    Menu("Margen para apuntes en todas las páginas") {
+                        ForEach(PageFactory.Paper.allCases, id: \.self) { paper in
+                            Button(paper.rawValue.capitalized) { editor.addNotesMargin(paper, allPages: true) }
+                        }
+                    }
+                    Divider()
                     Button("Girar página") { editor.rotateCurrentPage(by: 90) }
                     Button("Eliminar esta página", role: .destructive) { editor.deleteCurrentPage() }
                 }

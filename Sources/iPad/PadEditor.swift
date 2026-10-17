@@ -34,6 +34,8 @@ final class PadEditor {
     @ObservationIgnored private let ink = InkOverlay()
     @ObservationIgnored private var tap: UITapGestureRecognizer?
     @ObservationIgnored private var tapHandler: TapHandler?
+    @ObservationIgnored private var eraserPan: UIPanGestureRecognizer?
+    @ObservationIgnored private var erased: [(PDFAnnotation, PDFPage)] = []
     var undoManager: UndoManager?
 
     var mode: PadMode = .read { didSet { applyMode() } }
@@ -70,6 +72,13 @@ final class PadEditor {
         pdfView.addGestureRecognizer(tap)
         self.tap = tap
         tapHandler = handler
+        // Borrador arrastrando con el Pencil (el dedo sigue desplazando el PDF).
+        let pan = UIPanGestureRecognizer(target: handler, action: #selector(TapHandler.pan(_:)))
+        pan.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.pencil.rawValue)]
+        pan.isEnabled = false
+        pdfView.addGestureRecognizer(pan)
+        eraserPan = pan
+        handler.onPan = { [weak self] g in self?.eraseDrag(g) }
 
         NotificationCenter.default.addObserver(forName: .PDFViewScaleChanged, object: pdfView, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.ink.zoomChanged() }
@@ -85,6 +94,100 @@ final class PadEditor {
     private func applyMode() {
         pencil.setActive(mode == .pencil, over: pdfView)
         tap?.isEnabled = mode == .text || mode == .erase
+        eraserPan?.isEnabled = mode == .erase
+        // Doble toque = zoom solo en Leer; escribiendo o borrando molesta.
+        for g in Self.doubleTaps(in: pdfView) where g !== tap { g.isEnabled = mode == .read }
+        // Al borrar, el Pencil no desplaza el PDF (lo hace el dedo).
+        if let sv = Self.scrollView(in: pdfView) {
+            sv.panGestureRecognizer.allowedTouchTypes = mode == .erase
+                ? [NSNumber(value: UITouch.TouchType.direct.rawValue)]
+                : [UITouch.TouchType.direct, .pencil, .indirect, .indirectPointer].map { NSNumber(value: $0.rawValue) }
+        }
+    }
+
+    private static func doubleTaps(in view: UIView) -> [UITapGestureRecognizer] {
+        let own = (view.gestureRecognizers ?? []).compactMap { $0 as? UITapGestureRecognizer }.filter { $0.numberOfTapsRequired == 2 }
+        return own + view.subviews.flatMap { doubleTaps(in: $0) }
+    }
+
+    private static func scrollView(in view: UIView) -> UIScrollView? {
+        for sub in view.subviews {
+            if let sv = sub as? UIScrollView { return sv }
+            if let sv = scrollView(in: sub) { return sv }
+        }
+        return nil
+    }
+
+    // MARK: Borrador
+
+    private func eraseDrag(_ g: UIPanGestureRecognizer) {
+        switch g.state {
+        case .began, .changed:
+            let loc = g.location(in: pdfView)
+            guard let page = pdfView.page(for: loc, nearest: false) else { return }
+            let point = pdfView.convert(loc, to: page)
+            let tolerance = 6 / max(pdfView.scaleFactor, 0.1)
+            for a in page.annotations where Self.isErasable(a) && Self.hits(a, point, tolerance) {
+                page.removeAnnotation(a)
+                if a is SmoothInk { ink.render(page) }
+                erased.append((a, page))
+            }
+        default:
+            guard !erased.isEmpty else { return }
+            registerRestore(erased)
+            undoManager?.setActionName("Borrar")
+            erased = []
+        }
+    }
+
+    private func registerRestore(_ items: [(PDFAnnotation, PDFPage)]) {
+        undoManager?.registerUndo(withTarget: self) { ed in
+            for (a, page) in items {
+                page.addAnnotation(a)
+                if a is SmoothInk { ed.ink.render(page) }
+            }
+            ed.undoManager?.registerUndo(withTarget: ed) { ed2 in
+                for (a, page) in items {
+                    page.removeAnnotation(a)
+                    if a is SmoothInk { ed2.ink.render(page) }
+                }
+                ed2.registerRestore(items)
+            }
+        }
+    }
+
+    private static func isErasable(_ a: PDFAnnotation) -> Bool { a.type != "Widget" && a.type != "Link" && a.type != "Popup" }
+
+    /// Para la tinta mira la distancia a la línea, no a su rectángulo (si no, borra trazos cercanos).
+    private static func hits(_ a: PDFAnnotation, _ p: CGPoint, _ tolerance: CGFloat) -> Bool {
+        guard a.bounds.insetBy(dx: -tolerance, dy: -tolerance).contains(p) else { return false }
+        guard a.type == "Ink", let paths = a.paths else { return true }
+        let local = CGPoint(x: p.x - a.bounds.minX, y: p.y - a.bounds.minY)
+        let reach = tolerance + (a.border?.lineWidth ?? 1)
+        for path in paths {
+            var prev: CGPoint?, hit = false
+            path.cgPath.applyWithBlock { el in
+                let e = el.pointee
+                let q: CGPoint
+                switch e.type {
+                case .moveToPoint, .addLineToPoint: q = e.points[0]
+                case .addQuadCurveToPoint: q = e.points[1]
+                case .addCurveToPoint: q = e.points[2]
+                default: return
+                }
+                if let a0 = prev, distance(local, a0, q) <= reach { hit = true }
+                if prev == nil, hypot(local.x - q.x, local.y - q.y) <= reach { hit = true }
+                prev = q
+            }
+            if hit { return true }
+        }
+        return false
+    }
+
+    private static func distance(_ p: CGPoint, _ a: CGPoint, _ b: CGPoint) -> CGFloat {
+        let dx = b.x - a.x, dy = b.y - a.y, len = dx * dx + dy * dy
+        let t = len == 0 ? 0 : max(0, min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / len))
+        return hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy))
     }
 
     var currentPageIndex: Int { pdfView.currentPage.map { document.index(for: $0) } ?? 0 }
@@ -235,7 +338,8 @@ final class PadEditor {
         let point = pdfView.convert(loc, to: page)
         switch mode {
         case .erase:
-            if let a = page.annotation(at: point), a.type != "Widget", a.type != "Link" { remove(a, from: page) }
+            let tolerance = 8 / max(pdfView.scaleFactor, 0.1)
+            if let a = page.annotations.last(where: { Self.isErasable($0) && Self.hits($0, point, tolerance) }) { remove(a, from: page) }
         case .text:
             textTarget = (point, page)
             showTextPrompt = true
@@ -277,6 +381,32 @@ final class PadEditor {
         }
     }
 
+    /// Amplía la página actual (o todas) con un margen a la derecha para apuntes.
+    func addNotesMargin(_ paper: PageFactory.Paper, allPages: Bool) {
+        let pages = allPages ? (0..<document.pageCount).compactMap { document.page(at: $0) } : [pdfView.currentPage].compactMap { $0 }
+        let pairs = pages.compactMap { p in PageFactory.withMargin(p, paper: paper).map { (from: p, to: $0) } }
+        guard !pairs.isEmpty else { return }
+        exchange(pairs)
+        undoManager?.setActionName("Margen para apuntes")
+    }
+
+    /// Sustituye cada página `from` por `to` llevándose las anotaciones. Deshacer invierte el cambio.
+    private func exchange(_ pairs: [(from: PDFPage, to: PDFPage)]) {
+        let current = pdfView.currentPage
+        for (from, to) in pairs {
+            let i = document.index(for: from)
+            guard i >= 0, i < document.pageCount else { continue }
+            for a in from.annotations {
+                from.removeAnnotation(a)
+                to.addAnnotation(a)
+            }
+            document.removePage(at: i)
+            document.insert(to, at: i)
+        }
+        if let target = pairs.first(where: { $0.from === current })?.to { pdfView.go(to: target) }
+        undoManager?.registerUndo(withTarget: self) { $0.exchange(pairs.map { ($0.to, $0.from) }) }
+    }
+
     func deleteCurrentPage() {
         guard document.pageCount > 1, let page = pdfView.currentPage else { return }
         let index = document.index(for: page)
@@ -313,8 +443,10 @@ final class PadEditor {
 
 private final class TapHandler: NSObject {
     let action: (UITapGestureRecognizer) -> Void
+    var onPan: ((UIPanGestureRecognizer) -> Void)?
     init(_ action: @escaping (UITapGestureRecognizer) -> Void) { self.action = action }
     @objc func fire(_ g: UITapGestureRecognizer) { action(g) }
+    @objc func pan(_ g: UIPanGestureRecognizer) { onPan?(g) }
 }
 
 /// Lienzo de PencilKit encima de todo el visor, a la resolución de la pantalla (nítido con cualquier zoom).

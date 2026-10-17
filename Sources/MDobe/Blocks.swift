@@ -15,6 +15,14 @@ extension Editor {
         return page
     }
 
+    func addNotesMargin(_ paper: PageFactory.Paper, allPages: Bool) {
+        let pages = allPages ? (0..<document.pageCount).compactMap { document.page(at: $0) } : [pdfView.currentPage].compactMap { $0 }
+        let pairs = pages.compactMap { p in PageFactory.withMargin(p, paper: paper).map { (from: p, to: $0) } }
+        guard !pairs.isEmpty else { return }
+        exchange(pairs)
+        undoManager?.setActionName("Margen para apuntes")
+    }
+
     /// Dibuja el bloque (Markdown + LaTeX) dentro de la propia página, como contenido vectorial con texto real.
     func placeBlock(_ text: String, plain: Bool, at point: CGPoint, on page: PDFPage) {
         pendingBlock = nil
