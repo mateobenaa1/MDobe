@@ -11,6 +11,7 @@ button.active { background: var(--accent); }
 #tools { display: flex; gap: 4px; }
 #color { width: 34px; height: 34px; border: 0; padding: 0; background: none; }
 #docName { margin-left: auto; opacity: .7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 30vw; }
+#workspace { flex: 1; display: flex; min-height: 0; }
 #viewer { flex: 1; overflow: auto; padding: 16px; display: flex; flex-direction: column; align-items: center; gap: 16px; -webkit-overflow-scrolling: touch; }
 .empty { opacity: .6; margin-top: 30vh; }
 .page { position: relative; background: #fff; box-shadow: 0 2px 10px #0008; }
@@ -18,3 +19,17 @@ button.active { background: var(--accent); }
 .page canvas.overlay { position: absolute; inset: 0; touch-action: pan-x pan-y; }
 #viewer[data-tool]:not([data-tool="none"]) .overlay { touch-action: none; cursor: crosshair; }
 #viewer.drag { outline: 3px dashed var(--accent); outline-offset: -8px; }
+#ai { display: none; width: 360px; flex-direction: column; gap: 8px; padding: 10px; background: var(--bar); border-left: 1px solid #333; padding-bottom: max(10px, env(safe-area-inset-bottom)); }
+#ai.open { display: flex; }
+@media (max-width: 700px) { #ai.open { position: fixed; inset: 0; width: auto; z-index: 20; padding-top: max(10px, env(safe-area-inset-top)); } }
+.ai-head { display: flex; justify-content: space-between; align-items: center; }
+#aiSettings label { display: block; margin-top: 6px; font-size: 12px; opacity: .85; }
+#aiSettings input { width: 100%; margin-top: 3px; }
+#ai input, #ai textarea { background: #2b2b2b; color: var(--fg); border: 1px solid #444; border-radius: 6px; padding: 6px; font: inherit; font-size: 16px; }
+#aiLog { flex: 1; overflow: auto; display: flex; flex-direction: column; gap: 8px; }
+.msg { padding: 8px 10px; border-radius: 8px; white-space: pre-wrap; line-height: 1.4; }
+.msg.user { background: #3a3a3a; align-self: flex-end; max-width: 90%; }
+.msg.ai { background: #2f2f2f; }
+.msg.info { font-size: 12px; opacity: .75; }
+.ai-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+button.primary { background: var(--accent); }

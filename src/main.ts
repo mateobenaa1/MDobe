@@ -1,6 +1,7 @@
 import * as pdfjs from 'pdfjs-dist';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { Annotation, drawAnnotation, exportPdf } from './annotations';
+import { initAI } from './ai';
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 
@@ -33,6 +34,7 @@ async function openPdf(data: ArrayBuffer, name: string) {
   document.title = `${name} — MDobe`;
   ($('save') as HTMLButtonElement).disabled = false;
   await layout();
+  ai.onDocument();
 }
 
 async function layout() {
@@ -224,4 +226,12 @@ let resizeTimer = 0;
 window.addEventListener('resize', () => {
   clearTimeout(resizeTimer);
   resizeTimer = window.setTimeout(layout, 250);
+});
+
+const ai = initAI({
+  getPdf: () => pdf,
+  getBytes: () => bytes,
+  getFileName: () => fileName,
+  exportCurrent: () => exportPdf(bytes!, annotations),
+  addAnnotation: push,
 });

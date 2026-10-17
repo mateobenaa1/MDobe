@@ -28,8 +28,27 @@
     <input id="color" type="color" value="#d32f2f" title="Color" />
     <button id="undo" title="Deshacer">↶</button>
     <span id="docName"></span>
+    <button id="aiToggle" title="Asistente IA">✦ IA</button>
   </header>
-  <main id="viewer"><p class="empty">Abre un PDF o arrástralo aquí.</p></main>
+  <div id="workspace">
+    <main id="viewer"><p class="empty">Abre un PDF o arrástralo aquí.</p></main>
+    <aside id="ai">
+      <div class="ai-head"><strong>Asistente</strong><button id="aiClose" title="Cerrar">✕</button></div>
+      <details id="aiSettings">
+        <summary>Ajustes</summary>
+        <label>Clave de Gemini (gratis en aistudio.google.com)<input id="aiKey" type="password" autocomplete="off" /></label>
+        <label>Modelo<input id="aiModel" /></label>
+        <small>La clave solo se guarda en este dispositivo.</small>
+      </details>
+      <div id="aiLog"></div>
+      <textarea id="aiInput" rows="3" placeholder="Pregunta o pide un cambio: «resume esto», «resalta las fechas», «cambia 2024 por 2025»…"></textarea>
+      <div class="ai-actions">
+        <button id="aiSend" class="primary">Gemini</button>
+        <button id="gptShare" title="Enviar el PDF a la app de ChatGPT">PDF → ChatGPT</button>
+        <button id="gptCopy" title="Copiar pregunta + texto y abrir chatgpt.com">Copiar y abrir ChatGPT</button>
+      </div>
+    </aside>
+  </div>
   <script type="module" src="/src/main.ts"></script>
 </body>
 </html>
