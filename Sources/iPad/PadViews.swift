@@ -7,7 +7,7 @@ struct PadDocumentView: View {
     @State private var editor: PadEditor
     @State private var assistant: PadAssistant
     @State private var showAI = false
-    @State private var showThumbs = true
+    @AppStorage("pad.showThumbs") private var showThumbs = false
     @State private var newText = ""
 
     private var undoManager: UndoManager { doc.undoManager }
@@ -49,8 +49,9 @@ struct PadDocumentView: View {
                     Divider()
                     Button("Girar página") { editor.rotateCurrentPage(by: 90) }
                     Button("Eliminar esta página", role: .destructive) { editor.deleteCurrentPage() }
-                    Divider()
-                    Button(showThumbs ? "Ocultar miniaturas" : "Mostrar miniaturas") { showThumbs.toggle() }
+                }
+                Button(showThumbs ? "Ocultar miniaturas" : "Mostrar miniaturas", systemImage: showThumbs ? "rectangle.bottomthird.inset.filled" : "rectangle") {
+                    showThumbs.toggle()
                 }
                 Button("Asistente", systemImage: "sparkles") { showAI.toggle() }
             }

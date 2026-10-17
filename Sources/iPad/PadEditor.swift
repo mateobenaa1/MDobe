@@ -47,12 +47,15 @@ final class PadEditor {
 
     init(document: PDFDocument) {
         self.document = document
-        pdfView.document = document
+        // Las capas del Pencil tienen que configurarse ANTES de cargar el documento,
+        // si no PDFKit no las crea para las páginas.
+        overlay.editor = self
+        pdfView.pageOverlayViewProvider = overlay
+        pdfView.isInMarkupMode = true
         pdfView.autoScales = true
         pdfView.displayMode = .singlePageContinuous
         pdfView.displayDirection = .vertical
-        pdfView.pageOverlayViewProvider = overlay
-        overlay.editor = self
+        pdfView.document = document
 
         let handler = TapHandler { [weak self] g in self?.tapped(g) }
         let tap = UITapGestureRecognizer(target: handler, action: #selector(TapHandler.fire(_:)))
@@ -70,7 +73,6 @@ final class PadEditor {
     }
 
     private func applyMode() {
-        pdfView.isInMarkupMode = mode == .pencil
         overlay.setActive(mode == .pencil)
         tap?.isEnabled = mode == .text || mode == .erase
     }
