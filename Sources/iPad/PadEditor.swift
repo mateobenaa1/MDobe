@@ -422,6 +422,26 @@ final class PadEditor {
         undoManager?.registerUndo(withTarget: self) { $0.exchange(pairs.map { ($0.to, $0.from) }) }
     }
 
+    /// Cambia el PDF por su nueva versión recolocando tus anotaciones y páginas. Devuelve el resumen para el usuario.
+    func updateToNewVersion(_ fresh: PDFDocument) -> String {
+        let plan = PDFUpdate.plan(old: document, new: fresh)
+        guard plan.matched > 0 else {
+            return "No encuentro páginas en común: ¿es una versión de este mismo PDF?"
+        }
+        replacePages(plan.pages, plan.moves)
+        undoManager?.setActionName("Actualizar a la nueva versión")
+        return plan.summary
+    }
+
+    private func replacePages(_ pages: [PDFPage], _ moves: [PDFUpdate.Move]) {
+        let index = currentPageIndex
+        let undo = PDFUpdate.apply(pages, moves, to: document)
+        ink.forgetCache() // la tinta puede haber cambiado de página
+        pdfView.layoutDocumentView()
+        if let page = document.page(at: min(index, document.pageCount - 1)) { pdfView.go(to: page) }
+        undoManager?.registerUndo(withTarget: self) { $0.replacePages(undo.pages, undo.moves) }
+    }
+
     func deleteCurrentPage() {
         guard document.pageCount > 1, let page = pdfView.currentPage else { return }
         let index = document.index(for: page)

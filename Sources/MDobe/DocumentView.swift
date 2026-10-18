@@ -41,6 +41,11 @@ struct DocumentView: View {
         .sheet(isPresented: $editor.showSignaturePad) {
             SignaturePad { editor.tool = .sign }
         }
+        .alert("Nueva versión", isPresented: Binding(get: { editor.updateReport != nil }, set: { if !$0 { editor.updateReport = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(editor.updateReport ?? "")
+        }
         .onAppear { editor.undoManager = undoManager }
         .onChange(of: undoManager) { editor.undoManager = undoManager }
     }
@@ -103,6 +108,7 @@ struct DocumentView: View {
                 Button("Mover página abajo") { editor.moveCurrentPage(by: 1) }
                 Divider()
                 Button("Insertar PDF después de esta página…") { editor.insertPDFs() }
+                Button("Actualizar a una nueva versión del PDF…") { editor.updateToNewVersion() }
                 Button("Eliminar esta página", role: .destructive) { editor.deleteCurrentPage() }
                 Divider()
                 Picker("Vista", selection: Binding(get: { editor.pdfView.displayMode }, set: { editor.pdfView.displayMode = $0 })) {

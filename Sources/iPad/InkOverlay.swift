@@ -33,6 +33,8 @@ final class InkOverlay: NSObject, PDFPageOverlayViewProvider {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
     }
 
+    func forgetCache() { cache = [:] }
+
     func render(_ page: PDFPage) {
         guard let iv = views[page] else { return }
         guard page.rotation == 0 else { iv.image = nil; return } // páginas giradas: la pinta SmoothInk

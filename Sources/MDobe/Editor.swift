@@ -54,6 +54,8 @@ final class Editor {
     var ocrStatus: String?
     var suggestOCR = false
     var showBlockEditor = false
+    /// Resultado de pasar los apuntes a una nueva versión del PDF (se muestra en un aviso).
+    var updateReport: String?
     /// Bloque de texto listo para colocar: el siguiente clic en el PDF decide dónde.
     var pendingBlock: (text: String, plain: Bool)?
     /// Recibe la imagen PNG de una fórmula recuadrada y su número de página (1…).
@@ -372,6 +374,31 @@ final class Editor {
                 }
             }
         }
+    }
+
+    /// Cambia el PDF por su nueva versión (la que ha subido el profe) recolocando tus anotaciones y páginas.
+    func updateToNewVersion() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.pdf]
+        panel.message = "Elige la nueva versión de este PDF: tus apuntes se pasarán a ella"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard let fresh = PDFDocument(url: url) else { updateReport = "No se pudo abrir «\(url.lastPathComponent)»."; return }
+        let plan = PDFUpdate.plan(old: document, new: fresh)
+        guard plan.matched > 0 else {
+            updateReport = "No encuentro páginas en común: ¿es una versión de este mismo PDF? (Si está escaneado, pásale antes el OCR.)"
+            return
+        }
+        replacePages(plan.pages, plan.moves)
+        undoManager?.setActionName("Actualizar a la nueva versión")
+        updateReport = plan.summary
+    }
+
+    private func replacePages(_ pages: [PDFPage], _ moves: [PDFUpdate.Move]) {
+        let index = currentPageIndex
+        let undo = PDFUpdate.apply(pages, moves, to: document)
+        pdfView.layoutDocumentView()
+        if let page = document.page(at: min(index, document.pageCount - 1)) { pdfView.go(to: page) }
+        undoManager?.registerUndo(withTarget: self) { $0.replacePages(undo.pages, undo.moves) }
     }
 
     func print() {

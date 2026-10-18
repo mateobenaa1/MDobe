@@ -9,6 +9,8 @@ struct PadDocumentView: View {
     @State private var showAI = false
     @AppStorage("pad.showThumbs") private var showThumbs = false
     @State private var newText = ""
+    @State private var pickingNewVersion = false
+    @State private var updateReport: String?
 
     private var undoManager: UndoManager { doc.undoManager }
 
@@ -59,6 +61,8 @@ struct PadDocumentView: View {
                         }
                     }
                     Divider()
+                    Button("Actualizar a una nueva versión del PDF…") { pickingNewVersion = true }
+                    Divider()
                     Button("Girar página") { editor.rotateCurrentPage(by: 90) }
                     Button("Eliminar esta página", role: .destructive) { editor.deleteCurrentPage() }
                 }
@@ -84,12 +88,35 @@ struct PadDocumentView: View {
             }
             Button("Cancelar", role: .cancel) { newText = "" }
         }
+        .fileImporter(isPresented: $pickingNewVersion, allowedContentTypes: [.pdf]) { result in
+            guard case .success(let url) = result else { return }
+            Task { await updateToNewVersion(url) }
+        }
+        .alert("Nueva versión", isPresented: Binding(get: { updateReport != nil }, set: { if !$0 { updateReport = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(updateReport ?? "")
+        }
         .navigationTitle(doc.name)
         .navigationBarTitleDisplayMode(.inline)
         .overlay(alignment: .bottomTrailing) {
             if let status = doc.status, !editor.immersive || status.hasPrefix("No se pudo") {
                 Text(status).font(.caption).padding(6).background(.regularMaterial, in: Capsule()).padding(8)
             }
+        }
+    }
+}
+
+extension PadDocumentView {
+    private func updateToNewVersion(_ url: URL) async {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        do {
+            let data = try await Task.detached { try PadLibrary.coordinatedRead(url) }.value
+            guard let fresh = PDFDocument(data: data) else { throw CocoaError(.fileReadCorruptFile) }
+            updateReport = editor.updateToNewVersion(fresh)
+        } catch {
+            updateReport = "No se pudo abrir «\(url.lastPathComponent)»: \(error.localizedDescription)"
         }
     }
 }
