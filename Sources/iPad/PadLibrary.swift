@@ -31,7 +31,7 @@ final class PadLibrary {
         Task {
             defer { opening = false }
             do {
-                let data = try await Task.detached { try Self.coordinatedRead(url) }.value
+                let data = try await Task.detached { try LibraryFS.read(url) }.value
                 guard let pdf = PDFDocument(data: data) else { throw CocoaError(.fileReadCorruptFile) }
                 await current?.close()
                 current = OpenDoc(url: url, pdf: pdf, scoped: scoped)
@@ -70,23 +70,6 @@ final class PadLibrary {
 
     private func saveRecents() {
         if let data = try? JSONEncoder().encode(recents) { UserDefaults.standard.set(data, forKey: Self.recentsKey) }
-    }
-
-    nonisolated static func coordinatedRead(_ url: URL) throws -> Data {
-        var coordError: NSError?, result: Result<Data, Error> = .failure(CocoaError(.fileReadUnknown))
-        NSFileCoordinator().coordinate(readingItemAt: url, options: [], error: &coordError) { u in
-            result = Result { try Data(contentsOf: u) }
-        }
-        if let coordError { throw coordError }
-        return try result.get()
-    }
-
-    nonisolated static func coordinatedWrite(_ data: Data, to url: URL) throws {
-        var coordError: NSError?, writeError: Error?
-        NSFileCoordinator().coordinate(writingItemAt: url, options: .forReplacing, error: &coordError) { u in
-            do { try data.write(to: u, options: .atomic) } catch { writeError = error }
-        }
-        if let error = coordError ?? writeError { throw error }
     }
 }
 
@@ -133,7 +116,7 @@ final class OpenDoc: Identifiable {
         status = "Guardando…"
         let url = url
         do {
-            try await Task.detached { try PadLibrary.coordinatedWrite(data, to: url) }.value
+            try await Task.detached { try LibraryFS.write(data, to: url) }.value
             status = "Guardado"
             try? await Task.sleep(for: .seconds(2))
             if status == "Guardado" { status = nil }
@@ -155,11 +138,12 @@ final class OpenDoc: Identifiable {
 @main
 struct MDobePadApp: App {
     @State private var library = PadLibrary()
+    @State private var shelf = LibraryModel()
     @Environment(\.scenePhase) private var phase
 
     var body: some Scene {
         WindowGroup {
-            PadRootView(library: library)
+            PadRootView(library: library, shelf: shelf)
                 .onOpenURL { library.open($0) } // «Abrir con MDobe» desde Archivos u OneDrive
                 #if DEBUG
                 .task { if let path = ProcessInfo.processInfo.environment["MDOBE_OPEN"] { library.open(URL(fileURLWithPath: path)) } }
@@ -173,22 +157,26 @@ struct MDobePadApp: App {
 
 struct PadRootView: View {
     @Bindable var library: PadLibrary
+    let shelf: LibraryModel
     @State private var picking = false
 
     var body: some View {
-        NavigationStack {
-            Group {
-                if let doc = library.current {
+        Group {
+            if let doc = library.current {
+                NavigationStack {
                     PadDocumentView(doc: doc)
                         .id(doc.id)
                         .toolbar {
                             ToolbarItem(placement: .topBarLeading) {
-                                Button("Cerrar", systemImage: "chevron.backward") { library.close() }
+                                Button("Cerrar", systemImage: "chevron.backward") {
+                                    library.close()
+                                    shelf.changed()
+                                }
                             }
                         }
-                } else {
-                    home
                 }
+            } else {
+                LibraryView(model: shelf, open: { library.open($0) }, header: AnyView(home))
             }
         }
         .fileImporter(isPresented: $picking, allowedContentTypes: [.pdf]) { result in
@@ -201,29 +189,25 @@ struct PadRootView: View {
         }
     }
 
-    private var home: some View {
-        List {
-            Section {
-                Button {
-                    picking = true
-                } label: {
-                    Label("Abrir PDF…", systemImage: "folder").font(.title3)
-                }
-                .disabled(library.opening)
-                if library.opening {
-                    HStack { ProgressView(); Text("Abriendo (si está en OneDrive, se está descargando)…") }
-                }
-            } footer: {
-                Text("Puedes abrir PDFs de OneDrive, iCloud o del iPad. Los cambios se guardan solos en el mismo archivo.")
+    /// Arriba de la biblioteca: abrir un PDF suelto de cualquier sitio y los recientes.
+    @ViewBuilder private var home: some View {
+        Section {
+            Button {
+                picking = true
+            } label: {
+                Label("Abrir PDF de cualquier sitio…", systemImage: "doc.badge.plus")
             }
-            if !library.recents.isEmpty {
-                Section("Recientes") {
-                    ForEach(library.recents) { r in
-                        Button { library.open(r) } label: { Label(r.name, systemImage: "doc.richtext") }
-                    }
+            .disabled(library.opening)
+            if library.opening {
+                HStack { ProgressView(); Text("Abriendo (si está en la nube, se está descargando)…") }
+            }
+        }
+        if !library.recents.isEmpty {
+            Section("Recientes") {
+                ForEach(library.recents.prefix(5)) { r in
+                    Button { library.open(r) } label: { Label(r.name, systemImage: "clock") }
                 }
             }
         }
-        .navigationTitle("MDobe")
     }
 }

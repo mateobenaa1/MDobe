@@ -122,7 +122,7 @@ extension PadDocumentView {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
         do {
-            let data = try await Task.detached { try PadLibrary.coordinatedRead(url) }.value
+            let data = try await Task.detached { try LibraryFS.read(url) }.value
             guard let fresh = PDFDocument(data: data) else { throw CocoaError(.fileReadCorruptFile) }
             updateReport = editor.updateToNewVersion(fresh)
         } catch {
