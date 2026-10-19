@@ -12,17 +12,34 @@ final class InkOverlay: NSObject, PDFPageOverlayViewProvider {
 
     static let widthsKey = PDFAnnotationKey(rawValue: "/MDobeW")
 
+    /// Páginas que tienen capa de tinta en pantalla. Si una página no la tiene (p. ej. recién insertada),
+    /// SmoothInk se dibuja ella misma para que el trazo no desaparezca. PDFKit dibuja en otros hilos: va con candado.
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var covered = Set<ObjectIdentifier>()
+
+    static func covers(_ page: PDFPage) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return covered.contains(ObjectIdentifier(page))
+    }
+
+    private static func setCovered(_ page: PDFPage, _ on: Bool) {
+        lock.lock(); defer { lock.unlock() }
+        if on { covered.insert(ObjectIdentifier(page)) } else { covered.remove(ObjectIdentifier(page)) }
+    }
+
     func pdfView(_ view: PDFView, overlayViewFor page: PDFPage) -> UIView? {
         let iv = UIImageView()
         iv.isUserInteractionEnabled = false
         iv.contentMode = .scaleToFill
         views[page] = iv
+        Self.setCovered(page, true)
         DispatchQueue.main.async { self.render(page) }
         return iv
     }
 
     func pdfView(_ pdfView: PDFView, willEndDisplayingOverlayView overlayView: UIView, for page: PDFPage) {
         views[page] = nil
+        Self.setCovered(page, false)
     }
 
     /// Tras un zoom, vuelve a dibujar las páginas visibles a la nueva resolución.

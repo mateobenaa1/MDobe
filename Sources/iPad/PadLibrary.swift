@@ -101,6 +101,8 @@ final class OpenDoc: Identifiable {
     @ObservationIgnored private let scoped: Bool
     @ObservationIgnored private var dirty = false
     @ObservationIgnored private var saveTask: Task<Void, Never>?
+    /// Lo que se escribe en el archivo (el editor añade las hojas del cuaderno). Sin él, el PDF tal cual.
+    @ObservationIgnored var export: (() -> Data?)?
 
     var name: String { url.deletingPathExtension().lastPathComponent }
 
@@ -126,7 +128,7 @@ final class OpenDoc: Identifiable {
     }
 
     func save() async {
-        guard dirty, let data = pdf.dataRepresentation() else { return }
+        guard dirty, let data = export?() ?? pdf.dataRepresentation() else { return }
         dirty = false
         status = "Guardando…"
         let url = url

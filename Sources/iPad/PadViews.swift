@@ -18,6 +18,7 @@ struct PadDocumentView: View {
         self.doc = doc
         let editor = PadEditor(document: doc.pdf)
         editor.undoManager = doc.undoManager
+        doc.export = { [weak editor] in editor?.fileData() }
         _editor = State(initialValue: editor)
         _assistant = State(initialValue: PadAssistant(editor: editor))
     }
@@ -25,8 +26,14 @@ struct PadDocumentView: View {
     var body: some View {
         @Bindable var editor = editor
         VStack(spacing: 0) {
-            PDFRepresentable(view: editor.pdfView)
-                .ignoresSafeArea(edges: editor.immersive ? .all : [])
+            HStack(spacing: 0) {
+                PDFRepresentable(view: editor.pdfView)
+                if editor.showNotes {
+                    Divider()
+                    NotesPanel(editor: editor)
+                }
+            }
+            .ignoresSafeArea(edges: editor.immersive ? .all : [])
             if showThumbs, !editor.immersive {
                 ThumbnailStrip(pdfView: editor.pdfView).frame(height: 92)
             }
@@ -65,6 +72,9 @@ struct PadDocumentView: View {
                     Divider()
                     Button("Girar página") { editor.rotateCurrentPage(by: 90) }
                     Button("Eliminar esta página", role: .destructive) { editor.deleteCurrentPage() }
+                }
+                Button(editor.showNotes ? "Ocultar cuaderno" : "Cuaderno de apuntes", systemImage: editor.showNotes ? "book.fill" : "book") {
+                    editor.showNotes.toggle()
                 }
                 Button(showThumbs ? "Ocultar miniaturas" : "Mostrar miniaturas", systemImage: showThumbs ? "rectangle.bottomthird.inset.filled" : "rectangle") {
                     showThumbs.toggle()
@@ -117,6 +127,58 @@ extension PadDocumentView {
             updateReport = editor.updateToNewVersion(fresh)
         } catch {
             updateReport = "No se pudo abrir «\(url.lastPathComponent)»: \(error.localizedDescription)"
+        }
+    }
+}
+
+/// Hojas de apuntes de la página que estás viendo, al lado del PDF. Se pasan deslizando como un libro.
+private struct NotesPanel: View {
+    let editor: PadEditor
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 14) {
+                Button("Hoja anterior", systemImage: "chevron.left") { editor.flipNotes(by: -1) }
+                    .disabled(editor.notesSheet == 0)
+                Text(editor.notesCount == 0 ? "Apuntes · pág. \(editor.notesPage + 1)"
+                     : "Pág. \(editor.notesPage + 1) · hoja \(editor.notesSheet + 1) de \(editor.notesCount)")
+                    .font(.subheadline).monospacedDigit()
+                Button("Hoja siguiente", systemImage: "chevron.right") { editor.flipNotes(by: 1) }
+                    .disabled(editor.notesSheet + 1 >= editor.notesCount)
+                Spacer()
+                paperMenu
+                if editor.notesCount > 0 {
+                    Button("Eliminar hoja", systemImage: "trash", role: .destructive) { editor.deleteNotesSheet() }
+                }
+            }
+            .labelStyle(.iconOnly)
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .background(.bar)
+            ZStack {
+                PDFRepresentable(view: editor.notesView)
+                if editor.notesCount == 0 {
+                    VStack(spacing: 12) {
+                        Image(systemName: "book.pages").font(.largeTitle).foregroundStyle(.secondary)
+                        Text("Sin apuntes para esta página").foregroundStyle(.secondary)
+                        HStack {
+                            ForEach(PageFactory.Paper.allCases, id: \.self) { paper in
+                                Button(paper.rawValue.capitalized) { editor.addNotesSheet(paper) }
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color(.secondarySystemBackground))
+                }
+            }
+        }
+    }
+
+    private var paperMenu: some View {
+        Menu("Añadir hoja", systemImage: "plus") {
+            ForEach(PageFactory.Paper.allCases, id: \.self) { paper in
+                Button("Hoja \(paper.rawValue)") { editor.addNotesSheet(paper) }
+            }
         }
     }
 }

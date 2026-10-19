@@ -63,3 +63,22 @@ enum PageFactory {
         return new
     }
 }
+
+/// Hojas del cuaderno de apuntes: en el archivo van justo detrás de su página, marcadas con una anotación oculta.
+/// El iPad las saca del PDF y las muestra al lado de la página; cualquier otro lector las ve como páginas normales.
+extension PDFPage {
+    static let notesMarker = "MDobe-apuntes"
+
+    var isNotesSheet: Bool {
+        annotations.contains { $0.userName == Self.notesMarker } // PDFKit no guarda claves propias ni /NM; el autor (/T) sí
+    }
+
+    func markAsNotesSheet() {
+        let box = bounds(for: .mediaBox)
+        let a = PDFAnnotation(bounds: CGRect(x: box.minX, y: box.minY, width: 1, height: 1), forType: .square, withProperties: nil)
+        a.userName = Self.notesMarker
+        a.shouldDisplay = false
+        a.shouldPrint = false
+        addAnnotation(a)
+    }
+}
