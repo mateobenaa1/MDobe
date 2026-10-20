@@ -11,19 +11,21 @@ import UIKit
 struct LibraryView: View {
     @Bindable var model: LibraryModel
     let open: (URL) -> Void
-    /// Lo que va arriba del todo en la raíz (recientes, abrir de fuera…).
-    var header: AnyView = AnyView(EmptyView())
+    /// Últimos PDFs abiertos en este dispositivo (para «Seguir leyendo»).
+    var recents: [URL] = []
+    /// Abrir un PDF de fuera de la biblioteca.
+    var openOther: (() -> Void)?
 
     var body: some View {
         NavigationStack(path: $model.path) {
             Group {
                 if let root = model.root {
-                    FolderView(model: model, folder: root, open: open, header: header)
+                    FolderView(model: model, folder: root, open: open, recents: recents, openOther: openOther)
                 } else {
-                    LibrarySetup(model: model, header: header)
+                    LibrarySetup(model: model, recents: recents, open: open, openOther: openOther)
                 }
             }
-            .navigationDestination(for: URL.self) { FolderView(model: model, folder: $0, open: open, header: AnyView(EmptyView())) }
+            .navigationDestination(for: URL.self) { FolderView(model: model, folder: $0, open: open, recents: [], openOther: nil) }
         }
         // Al volver a la app, lo que haya llegado de la nube desde otros dispositivos.
         #if os(macOS)
@@ -39,39 +41,128 @@ struct LibraryView: View {
     }
 }
 
+// MARK: Estilo
+
+private enum Palette {
+    #if os(macOS)
+    static let page = Color(nsColor: .windowBackgroundColor)
+    static let card = Color(nsColor: .controlBackgroundColor)
+    #else
+    static let page = Color(uiColor: .systemGroupedBackground)
+    static let card = Color(uiColor: .secondarySystemGroupedBackground)
+    #endif
+    private static let tints: [Color] = [.blue, .indigo, .teal, .orange, .pink, .green, .purple, .red, .mint, .cyan]
+
+    /// Color fijo para cada proyecto (sale del nombre, así es el mismo en todos los dispositivos).
+    static func tint(for name: String) -> Color {
+        let sum = name.unicodeScalars.reduce(0) { ($0 &* 31 &+ Int($1.value)) & 0xFFFF }
+        return tints[sum % tints.count]
+    }
+}
+
+private struct Card: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .background(Palette.card, in: .rect(cornerRadius: 14))
+            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.quaternary.opacity(0.6)))
+            .shadow(color: .black.opacity(0.05), radius: 6, y: 2)
+    }
+}
+
+private extension View {
+    func card() -> some View { modifier(Card()) }
+}
+
+private struct SectionTitle: View {
+    let title: String
+    var trailing: String?
+    var body: some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(title).font(.title3.bold())
+            Spacer()
+            if let trailing { Text(trailing).font(.subheadline).foregroundStyle(.secondary) }
+        }
+    }
+}
+
+// MARK: Primera vez
+
 private struct LibrarySetup: View {
     let model: LibraryModel
-    let header: AnyView
+    let recents: [URL]
+    let open: (URL) -> Void
+    let openOther: (() -> Void)?
     @State private var picking = false
 
     var body: some View {
-        List {
-            header
-            Section {
-                Button { picking = true } label: {
-                    Label("Elegir carpeta de la biblioteca…", systemImage: "folder.badge.gearshape").font(.title3)
+        ScrollView {
+            VStack(spacing: 28) {
+                VStack(spacing: 14) {
+                    Image(systemName: "books.vertical.fill")
+                        .font(.system(size: 54))
+                        .foregroundStyle(.white)
+                        .frame(width: 104, height: 104)
+                        .background(LinearGradient(colors: [Color(red: 0.86, green: 0.2, blue: 0.16), Color(red: 0.6, green: 0.08, blue: 0.08)],
+                                                   startPoint: .top, endPoint: .bottom), in: .rect(cornerRadius: 26))
+                    Text("Bienvenido a MDobe").font(.largeTitle.bold())
+                    Text("Tus PDFs y apuntes, iguales en el Mac y en el iPad.")
+                        .font(.title3).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 }
-            } header: {
-                Text("Biblioteca")
-            } footer: {
-                Text("Elige o crea una carpeta «MDobe» en OneDrive, iCloud Drive o Google Drive. Cada proyecto será una subcarpeta y los apuntes van dentro de cada PDF, así que la nube lo sincroniza todo. En tus otros dispositivos elige la misma carpeta.")
-                    .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 16) {
+                    step(1, "Elige una carpeta en la nube", "Por ejemplo «MDobe» dentro de OneDrive (créala si no existe).", "icloud.and.arrow.up")
+                    step(2, "Un proyecto por asignatura", "Cada proyecto es una subcarpeta con sus PDFs y cuadernos.", "folder.fill")
+                    step(3, "Elige la misma en tus otros dispositivos", "Los apuntes van dentro de cada PDF, así que la nube lo sincroniza todo.", "arrow.triangle.2.circlepath")
+                }
+                .padding(20)
+                .card()
+                Button { picking = true } label: {
+                    Label("Elegir carpeta de la biblioteca", systemImage: "folder.badge.gearshape")
+                        .font(.headline).frame(maxWidth: 360).padding(.vertical, 6)
+                }
+                .buttonStyle(.borderedProminent).controlSize(.large)
+                if let openOther {
+                    Button("O abre un PDF suelto…", action: openOther).buttonStyle(.borderless)
+                }
+                if !recents.isEmpty {
+                    RecentShelf(model: model, urls: recents, open: open)
+                }
             }
+            .padding(28)
+            .frame(maxWidth: 640)
+            .frame(maxWidth: .infinity)
         }
+        .background(Palette.page)
         .navigationTitle("MDobe")
+        #if os(iOS)
+        .toolbar(.hidden, for: .navigationBar)
+        #endif
         .fileImporter(isPresented: $picking, allowedContentTypes: [.folder]) { result in
             if case .success(let url) = result { model.setRoot(url) }
         }
     }
+
+    private func step(_ n: Int, _ title: String, _ detail: String, _ symbol: String) -> some View {
+        HStack(alignment: .top, spacing: 14) {
+            Image(systemName: symbol).font(.title3).foregroundStyle(.tint).frame(width: 32)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("\(n). \(title)").font(.headline)
+                Text(detail).font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
 }
+
+// MARK: Carpeta (y portada en la raíz)
 
 private struct FolderView: View {
     let model: LibraryModel
     let folder: URL
     let open: (URL) -> Void
-    let header: AnyView
+    let recents: [URL]
+    let openOther: (() -> Void)?
 
     @AppStorage("library.sort") private var sort = LibraryFS.Sort.name
+    @AppStorage("library.grid") private var grid = true
     @State private var items: [LibraryItem] = []
     @State private var loaded = false
     @State private var query = ""
@@ -91,28 +182,39 @@ private struct FolderView: View {
     private var documents: [LibraryItem] { items.filter { !$0.isFolder } }
 
     var body: some View {
-        List {
-            if !query.isEmpty {
-                Section(results.isEmpty ? "Sin resultados" : "Resultados") {
-                    ForEach(results) { row($0, showLocation: true) }
-                }
-            } else {
-                if isRoot { header }
-                if !folders.isEmpty {
-                    Section(isRoot ? "Proyectos" : "Carpetas") { ForEach(folders) { row($0) } }
-                }
-                if !documents.isEmpty {
-                    Section("Documentos") { ForEach(documents) { row($0) } }
-                }
-                if loaded, items.isEmpty {
-                    Section {
-                        Text(isRoot ? "Crea tu primer proyecto con el botón +." : "Carpeta vacía. Añade un cuaderno o importa PDFs con el botón +.")
-                            .foregroundStyle(.secondary)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 30) {
+                if !query.isEmpty {
+                    searchResults
+                } else {
+                    if isRoot { home }
+                    if !folders.isEmpty {
+                        VStack(alignment: .leading, spacing: 12) {
+                            SectionTitle(title: isRoot ? "Proyectos" : "Carpetas", trailing: "\(folders.count)")
+                            LazyVGrid(columns: [GridItem(.adaptive(minimum: 190), spacing: 14)], spacing: 14) {
+                                ForEach(folders) { folderCard($0) }
+                            }
+                        }
                     }
+                    if !documents.isEmpty {
+                        VStack(alignment: .leading, spacing: 12) {
+                            SectionTitle(title: "Documentos", trailing: "\(documents.count)")
+                            documentsView(documents)
+                        }
+                    }
+                    if loaded, items.isEmpty { emptyState }
                 }
             }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 18)
+            .frame(maxWidth: 1180)
+            .frame(maxWidth: .infinity)
         }
-        .navigationTitle(isRoot ? "MDobe" : folder.lastPathComponent)
+        .background(Palette.page)
+        .navigationTitle(isRoot ? "Biblioteca" : folder.lastPathComponent)
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(isRoot ? .inline : .large)
+        #endif
         .searchable(text: $query, prompt: isRoot ? "Buscar en la biblioteca" : "Buscar en esta carpeta")
         .task(id: query) {
             guard !query.isEmpty else { return results = [] }
@@ -122,7 +224,7 @@ private struct FolderView: View {
         }
         .task(id: model.revision) { await reload() }
         .refreshable { await reload() }
-        .dropDestination(for: URL.self) { urls, _ in receive(urls, into: folder) }
+        .dropDestination(for: URL.self) { urls, _ in return receive(urls, into: folder) }
         .toolbar { toolbar }
         .alert(namingTitle, isPresented: Binding(get: { naming != nil }, set: { if !$0 { naming = nil } })) {
             TextField("Nombre", text: $nameText)
@@ -150,6 +252,147 @@ private struct FolderView: View {
         }
     }
 
+    // MARK: Portada
+
+    @ViewBuilder private var home: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(greeting).font(.largeTitle.bold())
+            Label(model.rootDescription, systemImage: "icloud")
+                .font(.subheadline).foregroundStyle(.secondary)
+        }
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 190), spacing: 12)], spacing: 12) {
+            if let openOther {
+                QuickAction(title: "Abrir PDF", subtitle: "De cualquier sitio", symbol: "doc.badge.plus", tint: .blue, action: openOther)
+            }
+            Menu {
+                ForEach(PageFactory.Paper.allCases, id: \.self) { paper in
+                    Button("Hojas \(paper.rawValue)") { ask(.notebook(paper)) }
+                }
+            } label: {
+                QuickActionLabel(title: "Nuevo cuaderno", subtitle: "Para escribir a mano", symbol: "book.closed.fill", tint: .orange)
+            }
+            .menuStyle(.button).buttonStyle(.plain)
+            .focusEffectDisabled()
+            QuickAction(title: "Nuevo proyecto", subtitle: "Una asignatura", symbol: "folder.fill.badge.plus", tint: .green) { ask(.folder) }
+            QuickAction(title: "Importar PDFs", subtitle: "A la biblioteca", symbol: "square.and.arrow.down.fill", tint: .purple) { importingPDFs = true }
+        }
+        if !recents.isEmpty {
+            RecentShelf(model: model, urls: recents, open: open)
+        }
+    }
+
+    private var greeting: String {
+        switch Calendar.current.component(.hour, from: .now) {
+        case 6..<14: "Buenos días"
+        case 14..<21: "Buenas tardes"
+        default: "Buenas noches"
+        }
+    }
+
+    @ViewBuilder private var emptyState: some View {
+        VStack(spacing: 14) {
+            Image(systemName: isRoot ? "folder.badge.plus" : "tray")
+                .font(.system(size: 44)).foregroundStyle(.secondary)
+            Text(isRoot ? "Aún no tienes proyectos" : "Carpeta vacía").font(.title2.bold())
+            Text(isRoot ? "Crea un proyecto para cada asignatura y mete ahí sus PDFs. También puedes arrastrar PDFs aquí."
+                 : "Añade un cuaderno o importa PDFs. También puedes arrastrarlos aquí.")
+                .foregroundStyle(.secondary).multilineTextAlignment(.center).frame(maxWidth: 420)
+            HStack {
+                if isRoot {
+                    Button("Nuevo proyecto", systemImage: "folder.badge.plus") { ask(.folder) }.buttonStyle(.borderedProminent)
+                } else {
+                    Menu("Nuevo cuaderno", systemImage: "book.closed") {
+                        ForEach(PageFactory.Paper.allCases, id: \.self) { paper in
+                            Button("Hojas \(paper.rawValue)") { ask(.notebook(paper)) }
+                        }
+                    }
+                    .fixedSize().buttonStyle(.borderedProminent)
+                }
+                Button("Importar PDFs", systemImage: "square.and.arrow.down") { importingPDFs = true }.buttonStyle(.bordered)
+            }
+        }
+        .padding(36)
+        .frame(maxWidth: .infinity)
+        .card()
+    }
+
+    @ViewBuilder private var searchResults: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionTitle(title: results.isEmpty ? "Sin resultados" : "Resultados", trailing: results.isEmpty ? nil : "\(results.count)")
+            if results.isEmpty {
+                Text("No hay nada que se llame «\(query)».").foregroundStyle(.secondary)
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(results) { item in
+                        row(item, showLocation: true)
+                        if item.id != results.last?.id { Divider().padding(.leading, 66) }
+                    }
+                }
+                .card()
+            }
+        }
+    }
+
+    // MARK: Tarjetas
+
+    private func folderCard(_ item: LibraryItem) -> some View {
+        NavigationLink(value: item.url) {
+            FolderCard(item: item)
+        }
+        .buttonStyle(.plain)
+        .dropDestination(for: URL.self) { urls, _ in return receive(urls, into: item.url) }
+        .draggable(item.url)
+        .contextMenu { menu(for: item) }
+    }
+
+    @ViewBuilder private func documentsView(_ docs: [LibraryItem]) -> some View {
+        if grid {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 140, maximum: 200), spacing: 18)], alignment: .leading, spacing: 22) {
+                ForEach(docs) { item in
+                    Button { open(item.url) } label: { DocumentCard(item: item) }
+                        .buttonStyle(.plain)
+                        .draggable(item.url)
+                        .contextMenu { menu(for: item) }
+                }
+            }
+        } else {
+            VStack(spacing: 0) {
+                ForEach(docs) { item in
+                    row(item)
+                    if item.id != docs.last?.id { Divider().padding(.leading, 66) }
+                }
+            }
+            .card()
+        }
+    }
+
+    private func row(_ item: LibraryItem, showLocation: Bool = false) -> some View {
+        let subtitle = showLocation ? model.location(of: item.url) : item.modified?.formatted(.relative(presentation: .named))
+        return Group {
+            if item.isFolder {
+                NavigationLink(value: item.url) {
+                    RowContent(item: item, subtitle: subtitle)
+                }
+            } else {
+                Button { open(item.url) } label: { RowContent(item: item, subtitle: subtitle) }
+            }
+        }
+        .buttonStyle(.plain)
+        .draggable(item.url)
+        .contextMenu { menu(for: item) }
+    }
+
+    @ViewBuilder private func menu(for item: LibraryItem) -> some View {
+        if !item.isFolder { Button("Abrir", systemImage: "doc.text") { open(item.url) } }
+        Button("Renombrar…", systemImage: "pencil") { ask(.rename(item)) }
+        Button("Mover a…", systemImage: "folder") { moving = item }
+        #if os(macOS)
+        Button("Mostrar en Finder", systemImage: "finder") { NSWorkspace.shared.activateFileViewerSelecting([item.url]) }
+        #endif
+        Divider()
+        Button("Eliminar…", systemImage: "trash", role: .destructive) { deleting = item }
+    }
+
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
         ToolbarItemGroup(placement: .primaryAction) {
@@ -163,6 +406,10 @@ private struct FolderView: View {
                 Button("Importar PDFs…", systemImage: "square.and.arrow.down") { importingPDFs = true }
             }
             Menu("Opciones", systemImage: "ellipsis.circle") {
+                Picker("Ver documentos como", selection: $grid) {
+                    Label("Portadas", systemImage: "square.grid.2x2").tag(true)
+                    Label("Lista", systemImage: "list.bullet").tag(false)
+                }
                 Picker("Ordenar por", selection: $sort) {
                     ForEach(LibraryFS.Sort.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                 }
@@ -171,42 +418,6 @@ private struct FolderView: View {
                     Button("Cambiar carpeta de la biblioteca…") { changingRoot = true }
                 }
             }
-        }
-    }
-
-    private func row(_ item: LibraryItem, showLocation: Bool = false) -> some View {
-        Group {
-            if item.isFolder {
-                NavigationLink(value: item.url) {
-                    Label {
-                        LibraryRowText(title: item.name, subtitle: showLocation ? model.location(of: item.url) : nil)
-                    } icon: {
-                        Image(systemName: "folder.fill").foregroundStyle(.tint)
-                    }
-                }
-                .dropDestination(for: URL.self) { urls, _ in receive(urls, into: item.url) }
-            } else {
-                Button { open(item.url) } label: {
-                    HStack(spacing: 12) {
-                        PDFThumb(url: item.url, modified: item.modified)
-                        LibraryRowText(title: item.name,
-                                       subtitle: showLocation ? model.location(of: item.url) : item.modified?.formatted(.relative(presentation: .named)))
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .draggable(item.url)
-        .contextMenu {
-            if !item.isFolder { Button("Abrir", systemImage: "doc.text") { open(item.url) } }
-            Button("Renombrar…", systemImage: "pencil") { ask(.rename(item)) }
-            Button("Mover a…", systemImage: "folder") { moving = item }
-            #if os(macOS)
-            Button("Mostrar en Finder", systemImage: "finder") { NSWorkspace.shared.activateFileViewerSelecting([item.url]) }
-            #endif
-            Divider()
-            Button("Eliminar…", systemImage: "trash", role: .destructive) { deleting = item }
         }
     }
 
@@ -276,14 +487,155 @@ private struct FolderView: View {
     }
 }
 
-private struct LibraryRowText: View {
+// MARK: Piezas
+
+private struct QuickActionLabel: View {
     let title: String
-    let subtitle: String?
+    let subtitle: String
+    let symbol: String
+    let tint: Color
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title).lineLimit(2)
-            if let subtitle { Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
+        HStack(spacing: 12) {
+            Image(systemName: symbol)
+                .font(.title3)
+                .foregroundStyle(.white)
+                .frame(width: 40, height: 40)
+                .background(tint.gradient, in: .rect(cornerRadius: 10))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title).font(.headline).foregroundStyle(.primary).lineLimit(1).minimumScaleFactor(0.8)
+                Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer(minLength: 0)
         }
+        .padding(12)
+        .frame(maxWidth: .infinity, minHeight: 64)
+        .contentShape(Rectangle())
+        .card()
+    }
+}
+
+private struct QuickAction: View {
+    let title: String
+    let subtitle: String
+    let symbol: String
+    let tint: Color
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) { QuickActionLabel(title: title, subtitle: subtitle, symbol: symbol, tint: tint) }
+            .buttonStyle(.plain)
+            .focusEffectDisabled()
+    }
+}
+
+/// Fila horizontal con las portadas de los últimos PDFs abiertos.
+private struct RecentShelf: View {
+    /// «Tema_3_Integrales» → «Tema 3 Integrales» (solo para mostrar).
+    static func pretty(_ name: String) -> String { name.replacingOccurrences(of: "_", with: " ") }
+    let model: LibraryModel
+    let urls: [URL]
+    let open: (URL) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionTitle(title: "Seguir leyendo")
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .top, spacing: 18) {
+                    ForEach(urls, id: \.self) { url in
+                        Button { open(url) } label: {
+                            VStack(alignment: .leading, spacing: 8) {
+                                PDFThumb(url: url, modified: nil, size: CGSize(width: 116, height: 150))
+                                Text(Self.pretty(url.deletingPathExtension().lastPathComponent))
+                                    .font(.subheadline.weight(.medium)).lineLimit(2).multilineTextAlignment(.leading)
+                                Text(model.contains(url) ? model.location(of: url) : url.deletingLastPathComponent().lastPathComponent)
+                                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                            }
+                            .frame(width: 128, alignment: .leading)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+        }
+    }
+}
+
+private struct FolderCard: View {
+    let item: LibraryItem
+    @State private var count: Int?
+
+    var body: some View {
+        let tint = Palette.tint(for: item.name)
+        VStack(alignment: .leading, spacing: 12) {
+            Image(systemName: "folder.fill")
+                .font(.title)
+                .foregroundStyle(tint.gradient)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(item.name).font(.headline).foregroundStyle(.primary).lineLimit(2).multilineTextAlignment(.leading)
+                Text(countText).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, minHeight: 100, alignment: .topLeading)
+        .background(alignment: .topTrailing) {
+            Circle().fill(tint.opacity(0.12)).frame(width: 90, height: 90).offset(x: 30, y: -30)
+        }
+        .clipShape(.rect(cornerRadius: 14))
+        .contentShape(Rectangle())
+        .card()
+        .task(id: item.modified) {
+            let url = item.url
+            count = await Task.detached { (try? LibraryFS.list(url, sort: .name))?.filter { !$0.isFolder }.count }.value
+        }
+    }
+
+    private var countText: String {
+        guard let count else { return " " }
+        return count == 1 ? "1 documento" : "\(count) documentos"
+    }
+}
+
+private struct DocumentCard: View {
+    let item: LibraryItem
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            PDFThumb(url: item.url, modified: item.modified, size: CGSize(width: 150, height: 194))
+                .frame(maxWidth: .infinity)
+            Text(RecentShelf.pretty(item.name)).font(.subheadline.weight(.medium)).lineLimit(2).multilineTextAlignment(.leading)
+            if let date = item.modified {
+                Text(date.formatted(.relative(presentation: .named))).font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .contentShape(Rectangle())
+    }
+}
+
+private struct RowContent: View {
+    let item: LibraryItem
+    let subtitle: String?
+
+    var body: some View {
+        HStack(spacing: 14) {
+            if item.isFolder {
+                Image(systemName: "folder.fill").font(.title2).foregroundStyle(Palette.tint(for: item.name).gradient)
+                    .frame(width: 38, height: 48)
+            } else {
+                PDFThumb(url: item.url, modified: item.modified, size: CGSize(width: 38, height: 48))
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(RecentShelf.pretty(item.name)).lineLimit(2).foregroundStyle(.primary)
+                if let subtitle { Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
+            }
+            Spacer(minLength: 0)
+            if item.isFolder { Image(systemName: "chevron.right").font(.caption.bold()).foregroundStyle(.tertiary) }
+        }
+        .padding(.horizontal, 14).padding(.vertical, 8)
+        .contentShape(Rectangle())
     }
 }
 
@@ -291,22 +643,26 @@ private struct LibraryRowText: View {
 private struct PDFThumb: View {
     let url: URL
     let modified: Date?
+    let size: CGSize
     @Environment(\.displayScale) private var scale
     @State private var image: CGImage?
 
     var body: some View {
-        Group {
+        ZStack {
             if let image {
                 Image(decorative: image, scale: scale).resizable().scaledToFit()
-                    .clipShape(.rect(cornerRadius: 3))
-                    .overlay(RoundedRectangle(cornerRadius: 3).stroke(.quaternary))
+                    .clipShape(.rect(cornerRadius: size.width > 60 ? 6 : 3))
+                    .overlay(RoundedRectangle(cornerRadius: size.width > 60 ? 6 : 3).strokeBorder(.quaternary))
+                    .shadow(color: .black.opacity(size.width > 60 ? 0.15 : 0), radius: 5, y: 3)
             } else {
-                Image(systemName: "doc.richtext").font(.title2).foregroundStyle(.secondary)
+                RoundedRectangle(cornerRadius: size.width > 60 ? 6 : 3)
+                    .fill(.quaternary.opacity(0.5))
+                    .overlay(Image(systemName: "doc.richtext").font(size.width > 60 ? .largeTitle : .title3).foregroundStyle(.secondary))
             }
         }
-        .frame(width: 36, height: 46)
+        .frame(width: size.width, height: size.height)
         .task(id: modified) {
-            let request = QLThumbnailGenerator.Request(fileAt: url, size: CGSize(width: 36, height: 46), scale: scale, representationTypes: .thumbnail)
+            let request = QLThumbnailGenerator.Request(fileAt: url, size: size, scale: scale, representationTypes: .thumbnail)
             image = try? await QLThumbnailGenerator.shared.generateBestRepresentation(for: request).cgImage
         }
     }

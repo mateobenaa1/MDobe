@@ -60,6 +60,16 @@ final class LibraryModel {
         return url.standardizedFileURL.path.hasPrefix(root.standardizedFileURL.path + "/")
     }
 
+    /// Dónde está la biblioteca, p. ej. «OneDrive-UPV › MDobe».
+    var rootDescription: String {
+        guard let root else { return "" }
+        let parts = root.standardizedFileURL.pathComponents
+        if let i = parts.firstIndex(of: "CloudStorage"), i + 1 < parts.count, parts[i + 1] != root.lastPathComponent {
+            return "\(parts[i + 1]) › \(root.lastPathComponent)"
+        }
+        return root.lastPathComponent
+    }
+
     /// Ruta legible dentro de la biblioteca, p. ej. «Cálculo / Tema 3».
     func location(of url: URL) -> String {
         guard let root else { return "" }

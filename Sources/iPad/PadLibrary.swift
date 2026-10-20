@@ -54,6 +54,14 @@ final class PadLibrary {
         open(url)
     }
 
+    /// Recientes que aún se encuentran (para «Seguir leyendo»).
+    var recentURLs: [URL] {
+        recents.prefix(8).compactMap { r in
+            var stale = false
+            return try? URL(resolvingBookmarkData: r.bookmark, bookmarkDataIsStale: &stale)
+        }
+    }
+
     func close() {
         guard let doc = current else { return }
         current = nil
@@ -176,7 +184,18 @@ struct PadRootView: View {
                         }
                 }
             } else {
-                LibraryView(model: shelf, open: { library.open($0) }, header: AnyView(home))
+                LibraryView(model: shelf, open: { library.open($0) }, recents: library.recentURLs, openOther: { picking = true })
+                    .overlay(alignment: .bottom) {
+                        if library.opening {
+                            HStack(spacing: 10) {
+                                ProgressView()
+                                Text("Abriendo… (si está en la nube, se está descargando)")
+                            }
+                            .padding(.horizontal, 16).padding(.vertical, 10)
+                            .background(.regularMaterial, in: Capsule())
+                            .padding()
+                        }
+                    }
             }
         }
         .fileImporter(isPresented: $picking, allowedContentTypes: [.pdf]) { result in
@@ -186,28 +205,6 @@ struct PadRootView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(library.error ?? "")
-        }
-    }
-
-    /// Arriba de la biblioteca: abrir un PDF suelto de cualquier sitio y los recientes.
-    @ViewBuilder private var home: some View {
-        Section {
-            Button {
-                picking = true
-            } label: {
-                Label("Abrir PDF de cualquier sitio…", systemImage: "doc.badge.plus")
-            }
-            .disabled(library.opening)
-            if library.opening {
-                HStack { ProgressView(); Text("Abriendo (si está en la nube, se está descargando)…") }
-            }
-        }
-        if !library.recents.isEmpty {
-            Section("Recientes") {
-                ForEach(library.recents.prefix(5)) { r in
-                    Button { library.open(r) } label: { Label(r.name, systemImage: "clock") }
-                }
-            }
         }
     }
 }

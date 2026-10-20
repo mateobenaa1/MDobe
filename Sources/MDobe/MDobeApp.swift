@@ -25,24 +25,25 @@ private struct MacLibrary: View {
     @Environment(\.openDocument) private var openDocument
 
     var body: some View {
-        LibraryView(model: shelf, open: open, header: AnyView(recents))
+        LibraryView(model: shelf, open: open, recents: recents, openOther: openOther)
+            .onAppear { recents = Array(NSDocumentController.shared.recentDocumentURLs.prefix(8)) }
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+                recents = Array(NSDocumentController.shared.recentDocumentURLs.prefix(8))
+            }
+    }
+
+    @State private var recents: [URL] = []
+
+    private func openOther() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.pdf]
+        panel.message = "Elige el PDF que quieres abrir"
+        if panel.runModal() == .OK, let url = panel.url { open(url) }
     }
 
     private func open(_ url: URL) {
         Task {
             do { try await openDocument(at: url) } catch { shelf.error = "No se pudo abrir «\(url.lastPathComponent)»: \(error.localizedDescription)" }
-        }
-    }
-
-    @ViewBuilder private var recents: some View {
-        let urls = NSDocumentController.shared.recentDocumentURLs.prefix(5)
-        if !urls.isEmpty {
-            Section("Recientes") {
-                ForEach(Array(urls), id: \.self) { url in
-                    Button { open(url) } label: { Label(url.deletingPathExtension().lastPathComponent, systemImage: "clock") }
-                        .buttonStyle(.plain)
-                }
-            }
         }
     }
 }
