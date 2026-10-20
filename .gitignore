@@ -3,3 +3,10 @@ build
 .DS_Store
 *.iconset
 MDobe.xcodeproj
+
+# Android
+android/local.properties
+android/.gradle/
+android/app/build/
+android/build/
+android/.kotlin/
