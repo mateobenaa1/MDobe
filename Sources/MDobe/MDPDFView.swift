@@ -16,6 +16,8 @@ final class MDPDFView: PDFView {
     private var dragStart: CGPoint = .zero // en coordenadas de la vista
     private var inkPoints: [CGPoint] = []
     private let preview = CAShapeLayer()
+    /// Cuadro de texto, imagen o tabla que se está arrastrando.
+    private var objectDrag: ObjectDrag?
 
     private var drawsShapes: Bool { [.ink, .whiteout, .formula].contains(tool) }
 
@@ -35,6 +37,17 @@ final class MDPDFView: PDFView {
         if let block = editor.pendingBlock {
             return editor.placeBlock(block.text, plain: block.plain, at: pagePoint, on: page)
         }
+        if let grow = editor.pendingGrow {
+            editor.pendingGrow = nil
+            return editor.growTable(grow, at: pagePoint, on: page)
+        }
+        // Con Seleccionar o Texto, los objetos se arrastran; doble clic para editarlos.
+        if tool == .select || tool == .text, let drag = ObjectDrag(at: pagePoint, on: page, scale: scaleFactor) {
+            if event.clickCount == 2 { return editor.edit(drag.object, on: page) }
+            objectDrag = drag
+            NSCursor.closedHand.push()
+            return
+        }
 
         switch tool {
         case .select, .highlight, .underline, .strike:
@@ -44,9 +57,7 @@ final class MDPDFView: PDFView {
                 editor.addNote(text, at: pagePoint, on: page)
             }
         case .text:
-            if let text = Self.askText(title: "Añadir texto", placeholder: "Texto…") {
-                editor.addText(text, at: pagePoint, on: page, color: editor.nsColor)
-            }
+            editor.beginText(at: pagePoint, on: page)
         case .eraser:
             editor.eraseAnnotation(at: pagePoint, on: page)
         case .sign:
@@ -64,6 +75,11 @@ final class MDPDFView: PDFView {
     }
 
     override func mouseDragged(with event: NSEvent) {
+        if let drag = objectDrag, let editor {
+            drag.update(to: convert(convert(event.locationInWindow, from: nil), to: drag.page))
+            editor.refresh(drag.page)
+            return
+        }
         guard drawsShapes, dragPage != nil else { return super.mouseDragged(with: event) }
         let p = convert(event.locationInWindow, from: nil)
         let path = CGMutablePath()
@@ -78,6 +94,14 @@ final class MDPDFView: PDFView {
 
     override func mouseUp(with event: NSEvent) {
         guard let editor else { return super.mouseUp(with: event) }
+        if let drag = objectDrag {
+            objectDrag = nil
+            NSCursor.pop()
+            editor.finishDrag(drag)
+            // Con la herramienta Texto, un clic sin arrastrar edita el cuadro.
+            if !drag.moved, tool == .text { editor.edit(drag.object, on: drag.page) }
+            return
+        }
         if tool.isMarkup {
             super.mouseUp(with: event)
             if let sel = currentSelection, !(sel.string ?? "").trimmingCharacters(in: .whitespaces).isEmpty {
@@ -107,6 +131,32 @@ final class MDPDFView: PDFView {
         }
     }
 
+    /// Clic derecho: editar/borrar objetos y ampliar tablas, además del menú normal del PDF.
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = super.menu(for: event) ?? NSMenu()
+        let p = convert(event.locationInWindow, from: nil)
+        guard let editor, let page = page(for: p, nearest: false) else { return menu }
+        let point = convert(p, to: page)
+        var items: [NSMenuItem] = []
+        let object = PageObjects.object(at: point, on: page, tolerance: 4 / max(scaleFactor, 0.1))
+        if let object, object is TextBox || object is TableBox {
+            items.append(ActionItem(object is TextBox ? "Editar texto…" : "Editar tabla…") { editor.edit(object, on: page) })
+        }
+        if object == nil || object is TableBox {
+            items.append(ActionItem("Añadir fila a esta tabla") { editor.growTable(.row, at: point, on: page) })
+            items.append(ActionItem("Añadir columna a esta tabla") { editor.growTable(.column, at: point, on: page) })
+        }
+        if let object {
+            items.append(ActionItem("Eliminar") {
+                editor.remove(object, from: page)
+                editor.undoManager?.setActionName("Eliminar")
+            })
+        }
+        items.append(.separator())
+        for (i, item) in items.enumerated() { menu.insertItem(item, at: i) }
+        return menu
+    }
+
     private func startPreview() {
         wantsLayer = true
         preview.path = nil
@@ -134,6 +184,21 @@ final class MDPDFView: PDFView {
         let text = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         return text.isEmpty ? nil : text
     }
+}
+
+/// Opción de menú que ejecuta un bloque.
+private final class ActionItem: NSMenuItem {
+    private let handler: () -> Void
+
+    init(_ title: String, handler: @escaping () -> Void) {
+        self.handler = handler
+        super.init(title: title, action: #selector(run), keyEquivalent: "")
+        target = self
+    }
+
+    required init(coder: NSCoder) { fatalError() }
+
+    @objc private func run() { handler() }
 }
 
 extension CGRect {

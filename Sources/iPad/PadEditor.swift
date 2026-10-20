@@ -27,7 +27,7 @@ enum PadMode: String, CaseIterable, Identifiable {
 /// Estado y edición de un PDF en el iPad. Igual que en el Mac, todo cambio pasa por el UndoManager
 /// (así se puede deshacer y el documento se marca como modificado y se guarda).
 @MainActor @Observable
-final class PadEditor {
+final class PadEditor: ObjectEditing {
     let document: PDFDocument
     let pdfView = PDFView()
     @ObservationIgnored private let pencil = PencilLayer()
@@ -43,10 +43,17 @@ final class PadEditor {
     var immersive = false
     @ObservationIgnored private var chromeTap: UITapGestureRecognizer?
     private(set) var hasSelection = false
-    var showTextPrompt = false
-    @ObservationIgnored private var textTarget: (point: CGPoint, page: PDFPage)?
+    /// Cuadro de texto o tabla que se está editando (se muestra como hoja).
+    var objectEdit: ObjectEdit?
+    var objectNotice: String?
+    /// Añadir fila/columna: el siguiente toque dice en qué tabla.
+    var pendingGrow: TableGrow?
+    @ObservationIgnored private var objectDrag: ObjectDrag?
+    @ObservationIgnored private var moveGestures: [UILongPressGestureRecognizer] = []
 
-    var searchText = ""
+    var searchText = "" {
+        didSet { if searchText.isEmpty, !lastQuery.isEmpty { clearSearch() } }
+    }
     private(set) var results: [PDFSelection] = []
     private(set) var resultIndex = 0
     @ObservationIgnored private var lastQuery = ""
@@ -78,13 +85,18 @@ final class PadEditor {
         extractNotes()
         pdfView.document = document
         SmoothInk.adopt(in: document)
+        PageObjects.adopt(in: document)
+        MovableAnnotation.drawnElsewhere = { $0.rotation == 0 && InkOverlay.covers($0) }
         notesPencil.editor = self
         notesInk.pdfView = notesView
         notesView.pageOverlayViewProvider = notesInk
         notesView.autoScales = true
         notesView.displayMode = .singlePage
         notesView.displayDirection = .horizontal
-        notes.values.forEach { SmoothInk.adopt(in: $0) }
+        notes.values.forEach {
+            SmoothInk.adopt(in: $0)
+            PageObjects.adopt(in: $0)
+        }
         #if DEBUG
         if ProcessInfo.processInfo.environment["MDOBE_TEST_INK"] != nil, let page = document.page(at: 0) {
             let pts = (0..<200).map { i in CGPoint(x: 150 + Double(i) * 1.2, y: 650 + 25 * sin(Double(i) / 12)) }
@@ -105,7 +117,14 @@ final class PadEditor {
             pan.isEnabled = false
             view.addGestureRecognizer(pan)
             eraserPans.append(pan)
+            // Mover cuadros de texto, imágenes y tablas: al momento en modo Texto, con una pulsación larga en Leer.
+            let move = MoveGesture(target: handler, action: #selector(TapHandler.move(_:)))
+            move.delegate = handler
+            view.addGestureRecognizer(move)
+            moveGestures.append(move)
         }
+        handler.onMove = { [weak self] g in self?.moveObject(g) }
+        handler.canMove = { [weak self] g in self?.canMove(g) ?? false }
         handler.onPan = { [weak self] g in self?.eraseDrag(g) }
         // Pasar hojas del cuaderno deslizando el dedo, como un libro.
         for direction in [UISwipeGestureRecognizer.Direction.left, .right] {
@@ -153,6 +172,10 @@ final class PadEditor {
         pencil.setActive(mode == .pencil, over: pdfView)
         if mode == .pencil { pencil.focus() } // la barra de herramientas sigue al lienzo del PDF
         taps.forEach { $0.isEnabled = mode == .text || mode == .erase }
+        for g in moveGestures {
+            g.isEnabled = mode == .text || mode == .read
+            g.minimumPressDuration = mode == .text ? 0 : 0.35
+        }
         eraserPans.forEach { $0.isEnabled = mode == .erase }
         chromeTap?.isEnabled = mode == .read || mode == .pencil
         if let chromeTap { for g in Self.doubleTaps(in: pdfView) { chromeTap.require(toFail: g) } }
@@ -193,7 +216,7 @@ final class PadEditor {
             let tolerance = 6 / max(view.scaleFactor, 0.1)
             for a in page.annotations where Self.isErasable(a) && Self.hits(a, point, tolerance) {
                 page.removeAnnotation(a)
-                if a is SmoothInk { renderInk(page) }
+                if Self.inOverlay(a) { renderInk(page) }
                 erased.append((a, page))
             }
         default:
@@ -208,12 +231,12 @@ final class PadEditor {
         undoManager?.registerUndo(withTarget: self) { ed in
             for (a, page) in items {
                 page.addAnnotation(a)
-                if a is SmoothInk { ed.renderInk(page) }
+                if Self.inOverlay(a) { ed.renderInk(page) }
             }
             ed.undoManager?.registerUndo(withTarget: ed) { ed2 in
                 for (a, page) in items {
                     page.removeAnnotation(a)
-                    if a is SmoothInk { ed2.renderInk(page) }
+                    if Self.inOverlay(a) { ed2.renderInk(page) }
                 }
                 ed2.registerRestore(items)
             }
@@ -266,19 +289,29 @@ final class PadEditor {
     func add(_ a: PDFAnnotation, to page: PDFPage) {
         a.shouldPrint = true
         page.addAnnotation(a)
-        if a is SmoothInk { renderInk(page) }
+        if Self.inOverlay(a) { renderInk(page) }
         undoManager?.registerUndo(withTarget: self) { $0.remove(a, from: page) }
     }
 
     func remove(_ a: PDFAnnotation, from page: PDFPage) {
         page.removeAnnotation(a)
-        if a is SmoothInk { renderInk(page) }
+        if Self.inOverlay(a) { renderInk(page) }
         undoManager?.registerUndo(withTarget: self) { $0.add(a, to: page) }
     }
+
+    /// Lo que pinta la capa de tinta (a la resolución del zoom) en vez de PDFKit.
+    private static func inOverlay(_ a: PDFAnnotation) -> Bool { a is SmoothInk || a is MovableAnnotation }
 
     private func renderInk(_ page: PDFPage) {
         ink.render(page)
         notesInk.render(page)
+    }
+
+    var objectView: PDFView { pdfView }
+
+    func refresh(_ page: PDFPage) {
+        renderInk(page)
+        for view in [pdfView, notesView] where view.document === page.document { view.annotationsChanged(on: page) }
     }
 
     func grouped(_ name: String, _ body: () -> Void) {
@@ -411,26 +444,53 @@ final class PadEditor {
             let tolerance = 8 / max(view.scaleFactor, 0.1)
             if let a = page.annotations.last(where: { Self.isErasable($0) && Self.hits($0, point, tolerance) }) { remove(a, from: page) }
         case .text:
-            textTarget = (point, page)
-            showTextPrompt = true
+            textTap(at: point, on: page)
         default: break
         }
     }
 
-    func addPendingText(_ text: String) {
-        guard let (point, page) = textTarget, !text.isEmpty else { return }
-        textTarget = nil
-        let font = UIFont(name: "Helvetica", size: 12) ?? .systemFont(ofSize: 12)
-        let measured = (text as NSString).boundingRect(with: CGSize(width: 1000, height: 10000), options: .usesLineFragmentOrigin, attributes: [.font: font], context: nil)
-        let size = CGSize(width: ceil(measured.width) + 12, height: ceil(measured.height) + 6)
-        let a = PDFAnnotation(bounds: CGRect(x: point.x, y: point.y - size.height, width: size.width, height: size.height), forType: .freeText, withProperties: nil)
-        a.contents = text
-        a.font = font
-        a.fontColor = .black
-        a.color = .clear
-        a.border = PDFBorder()
-        a.border?.lineWidth = 0
-        add(a, to: page)
+    private func textTap(at point: CGPoint, on page: PDFPage) {
+        if let grow = pendingGrow {
+            pendingGrow = nil
+            growTable(grow, at: point, on: page)
+        } else {
+            beginText(at: point, on: page)
+        }
+    }
+
+    // MARK: Mover objetos
+
+    private func canMove(_ g: UIGestureRecognizer) -> Bool {
+        guard let view = g.view as? PDFView, mode == .text || mode == .read else { return false }
+        let loc = g.location(in: view)
+        guard let page = view.page(for: loc, nearest: false) else { return false }
+        return PageObjects.object(at: view.convert(loc, to: page), on: page, tolerance: 6 / max(view.scaleFactor, 0.1)) != nil
+    }
+
+    private func moveObject(_ g: UILongPressGestureRecognizer) {
+        guard let view = g.view as? PDFView else { return }
+        let loc = g.location(in: view)
+        switch g.state {
+        case .began:
+            guard let page = view.page(for: loc, nearest: false),
+                  let drag = ObjectDrag(at: view.convert(loc, to: page), on: page, scale: view.scaleFactor) else { return }
+            objectDrag = drag
+            Self.scrollView(in: view)?.isScrollEnabled = false
+            if mode == .read { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
+        case .changed:
+            guard let drag = objectDrag else { return }
+            drag.update(to: view.convert(loc, to: drag.page))
+            renderInk(drag.page)
+        default:
+            Self.scrollView(in: view)?.isScrollEnabled = true
+            guard let drag = objectDrag else { return }
+            objectDrag = nil
+            finishDrag(drag)
+            // Un toque sin arrastrar en modo Texto edita el cuadro (o amplía la tabla si se estaba eligiendo una).
+            if !drag.moved, g.state == .ended, mode == .text {
+                textTap(at: view.convert(loc, to: drag.page), on: drag.page)
+            }
+        }
     }
 
     // MARK: Páginas
@@ -538,6 +598,8 @@ final class PadEditor {
 
     /// El PDF tal como se guarda: con las hojas del cuaderno detrás de su página (sin tocar lo que se ve).
     func fileData() -> Data? {
+        MovableAnnotation.exporting = true
+        defer { MovableAnnotation.exporting = false }
         guard let data = document.dataRepresentation() else { return nil }
         let books = notes.compactMap { parent, book -> (index: Int, book: PDFDocument)? in
             let i = document.index(for: parent)
@@ -634,6 +696,15 @@ final class PadEditor {
         step(0)
     }
 
+    /// Al cerrar la búsqueda (la ✕) desaparecen los resaltados naranjas.
+    private func clearSearch() {
+        lastQuery = ""
+        results = []
+        resultIndex = 0
+        pdfView.highlightedSelections = nil
+        pdfView.clearSelection()
+    }
+
     func step(_ delta: Int) {
         guard !results.isEmpty else { return }
         resultIndex = (resultIndex + delta + results.count) % results.count
@@ -642,12 +713,23 @@ final class PadEditor {
     }
 }
 
+private final class MoveGesture: UILongPressGestureRecognizer {}
+
 private final class TapHandler: NSObject, UIGestureRecognizerDelegate {
     let action: (UITapGestureRecognizer) -> Void
     var onPan: ((UIPanGestureRecognizer) -> Void)?
     var onSwipe: ((UISwipeGestureRecognizer) -> Void)?
+    var onMove: ((UILongPressGestureRecognizer) -> Void)?
+    var canMove: ((UIGestureRecognizer) -> Bool)?
     @objc func swipe(_ g: UISwipeGestureRecognizer) { onSwipe?(g) }
-    func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
+    @objc func move(_ g: UILongPressGestureRecognizer) { onMove?(g) }
+    // Mover un objeto se queda con el toque: el PDF no se desplaza a la vez.
+    func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+        !(g is MoveGesture || other is MoveGesture)
+    }
+    func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
+        g is MoveGesture ? canMove?(g) ?? false : true
+    }
     var onChrome: (() -> Void)?
     @objc func chrome(_ g: UITapGestureRecognizer) { onChrome?() }
     init(_ action: @escaping (UITapGestureRecognizer) -> Void) { self.action = action }

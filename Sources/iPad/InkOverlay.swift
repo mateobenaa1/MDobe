@@ -4,6 +4,7 @@ import UIKit
 
 /// Muestra la tinta a mano encima de cada página como imagen a la resolución del zoom, con el grosor
 /// de cada punto (presión del Pencil). En el archivo la tinta es una anotación normal; aquí PDFKit no la pinta (ver SmoothInk).
+/// Lo mismo con los cuadros de texto, imágenes y tablas (MovableAnnotation), para que no se vean pixelados.
 final class InkOverlay: NSObject, PDFPageOverlayViewProvider {
     weak var pdfView: PDFView?
     private var views: [PDFPage: UIImageView] = [:]
@@ -57,7 +58,8 @@ final class InkOverlay: NSObject, PDFPageOverlayViewProvider {
         guard page.rotation == 0 else { iv.image = nil; return } // páginas giradas: la pinta SmoothInk
         let box = page.bounds(for: pdfView?.displayBox ?? .cropBox)
         let inks = page.annotations.compactMap { $0 as? SmoothInk }.map { (stroke(for: $0, box: box), $0.color) }
-        guard !inks.isEmpty, box.width > 0, box.height > 0 else { iv.image = nil; return }
+        let objects = page.annotations.compactMap { $0 as? MovableAnnotation }
+        guard !inks.isEmpty || !objects.isEmpty, box.width > 0, box.height > 0 else { iv.image = nil; return }
         let screen = pdfView?.window?.screen.scale ?? 2
         let zoom = pdfView?.scaleFactor ?? 1
         let maxScale = (12_000_000 / (box.width * box.height)).squareRoot() // tope de memoria por página
@@ -66,6 +68,14 @@ final class InkOverlay: NSObject, PDFPageOverlayViewProvider {
         format.opaque = false
         iv.image = UIGraphicsImageRenderer(size: box.size, format: format).image { ctx in
             let cg = ctx.cgContext
+            if !objects.isEmpty {
+                // Coordenadas de página (y hacia arriba) sobre la imagen (y hacia abajo).
+                cg.saveGState()
+                cg.translateBy(x: -box.minX, y: box.maxY)
+                cg.scaleBy(x: 1, y: -1)
+                objects.forEach { $0.drawContent(in: cg) }
+                cg.restoreGState()
+            }
             cg.setLineCap(.round)
             cg.setLineJoin(.round)
             for (lines, color) in inks {

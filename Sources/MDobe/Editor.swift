@@ -44,7 +44,7 @@ enum Tool: String, CaseIterable, Identifiable {
 
 /// Estado y operaciones de edición de un documento. Todo cambio pasa por `add`/`remove` para poder deshacerlo.
 @MainActor @Observable
-final class Editor {
+final class Editor: ObjectEditing {
     let document: PDFDocument
     let pdfView = MDPDFView()
     var tool: Tool = .select { didSet { pdfView.tool = tool } }
@@ -60,8 +60,15 @@ final class Editor {
     var pendingBlock: (text: String, plain: Bool)?
     /// Recibe la imagen PNG de una fórmula recuadrada y su número de página (1…).
     @ObservationIgnored var onFormula: ((Data, Int) -> Void)?
+    /// Cuadro de texto o tabla que se está editando (se muestra como hoja).
+    var objectEdit: ObjectEdit?
+    var objectNotice: String?
+    /// Añadir fila/columna: el siguiente clic dice en qué tabla.
+    var pendingGrow: TableGrow?
 
-    var searchText = ""
+    var searchText = "" {
+        didSet { if searchText.isEmpty, !lastQuery.isEmpty { clearSearch() } }
+    }
     private(set) var results: [PDFSelection] = []
     private(set) var resultIndex = 0
     private var lastQuery = ""
@@ -73,6 +80,7 @@ final class Editor {
         pdfView.displayMode = .singlePageContinuous
         pdfView.backgroundColor = .underPageBackgroundColor
         pdfView.editor = self
+        PageObjects.adopt(in: document)
         suggestOCR = document.pageCount > 0 && (0..<min(3, document.pageCount)).allSatisfy(isScanned)
         NotificationCenter.default.addObserver(forName: .PDFViewAnnotationHit, object: pdfView, queue: .main) { [weak self] n in
             MainActor.assumeIsolated { self?.widgetHit(n) }
@@ -145,18 +153,26 @@ final class Editor {
         add(a, to: page)
     }
 
-    func addText(_ text: String, at point: CGPoint, on page: PDFPage, size: CGFloat = 12, color: NSColor = .black) {
-        let font = NSFont(name: "Helvetica", size: size) ?? .systemFont(ofSize: size)
-        let measured = (text as NSString).boundingRect(with: CGSize(width: 1000, height: 10000), options: .usesLineFragmentOrigin, attributes: [.font: font])
-        let size = CGSize(width: ceil(measured.width) + 12, height: ceil(measured.height) + 6)
-        let a = PDFAnnotation(bounds: CGRect(x: point.x, y: point.y - size.height, width: size.width, height: size.height), forType: .freeText, withProperties: nil)
-        a.contents = text
-        a.font = font
-        a.fontColor = color
-        a.color = .clear
-        a.border = PDFBorder()
-        a.border?.lineWidth = 0
-        add(a, to: page)
+    var objectView: PDFView { pdfView }
+
+    func refresh(_ page: PDFPage) {
+        pdfView.annotationsChanged(on: page)
+    }
+
+    func insertImageFromFile() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        panel.message = "Elige la imagen que quieres poner en esta página"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard let data = try? Data(contentsOf: url) else { objectNotice = "No se pudo abrir «\(url.lastPathComponent)»."; return }
+        insertImage(data)
+    }
+
+    func pasteImage() {
+        let pb = NSPasteboard.general
+        if let data = pb.data(forType: .png) ?? pb.data(forType: .tiff) { return insertImage(data) }
+        if let url = pb.readObjects(forClasses: [NSURL.self])?.first as? URL, let data = try? Data(contentsOf: url) { return insertImage(data) }
+        objectNotice = "No hay ninguna imagen copiada. Copia una imagen (o haz una captura con ⌘⇧⌃4) y vuelve a probar."
     }
 
     func addInk(_ path: NSBezierPath, on page: PDFPage, color: NSColor? = nil, width: CGFloat = 1.8) {
@@ -304,6 +320,15 @@ final class Editor {
         pdfView.highlightedSelections = results
         resultIndex = 0
         showResult()
+    }
+
+    /// Al cerrar la búsqueda (la ✕) desaparecen los resaltados naranjas.
+    private func clearSearch() {
+        lastQuery = ""
+        results = []
+        resultIndex = 0
+        pdfView.highlightedSelections = nil
+        pdfView.clearSelection()
     }
 
     func step(_ delta: Int) {

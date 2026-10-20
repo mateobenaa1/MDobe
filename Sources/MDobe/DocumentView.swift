@@ -38,6 +38,14 @@ struct DocumentView: View {
             }
         }
         .sheet(isPresented: $editor.showBlockEditor) { BlockEditor(editor: editor) }
+        .sheet(item: $editor.objectEdit) { edit in
+            ObjectEditSheet(edit: edit, defaultColor: editor.tool == .text ? editor.color : .black, editor: editor)
+        }
+        .alert("MDobe", isPresented: Binding(get: { editor.objectNotice != nil }, set: { if !$0 { editor.objectNotice = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(editor.objectNotice ?? "")
+        }
         .sheet(isPresented: $editor.showSignaturePad) {
             SignaturePad { editor.tool = .sign }
         }
@@ -52,7 +60,16 @@ struct DocumentView: View {
 
     @ViewBuilder
     private var statusOverlay: some View {
-        if editor.pendingBlock != nil {
+        if let grow = editor.pendingGrow {
+            HStack {
+                Label(grow == .row ? "Haz clic dentro de la tabla para añadirle una fila debajo" : "Haz clic dentro de la tabla para añadirle una columna a la derecha",
+                      systemImage: "tablecells")
+                Button("Cancelar") { editor.pendingGrow = nil }
+            }
+            .padding(.horizontal, 14).padding(.vertical, 8)
+            .background(.regularMaterial, in: Capsule())
+            .padding()
+        } else if editor.pendingBlock != nil {
             HStack {
                 Label("Haz clic en el PDF donde quieras colocar el bloque", systemImage: "hand.point.up.left")
                 Button("Cancelar") { editor.pendingBlock = nil }
@@ -121,6 +138,13 @@ struct DocumentView: View {
         ToolbarItem {
             Menu("Insertar", systemImage: "plus.square.on.square") {
                 Button("Bloque de texto y fórmulas…") { editor.showBlockEditor = true }
+                Divider()
+                Button("Imagen…") { editor.insertImageFromFile() }
+                Button("Pegar imagen copiada") { editor.pasteImage() }
+                Divider()
+                Button("Tabla…") { editor.insertTable() }
+                Button("Añadir fila a una tabla del PDF") { editor.pendingGrow = .row }
+                Button("Añadir columna a una tabla del PDF") { editor.pendingGrow = .column }
                 Divider()
                 ForEach(PageFactory.Paper.allCases, id: \.self) { paper in
                     Button("Página en blanco: \(paper.rawValue)") { editor.insertBlankPage(paper) }

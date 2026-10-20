@@ -1,5 +1,6 @@
 import Observation
 import PDFKit
+import PhotosUI
 import SwiftUI
 
 struct PadDocumentView: View {
@@ -8,7 +9,9 @@ struct PadDocumentView: View {
     @State private var assistant: PadAssistant
     @State private var showAI = false
     @AppStorage("pad.showThumbs") private var showThumbs = false
-    @State private var newText = ""
+    @State private var pickingPhoto = false
+    @State private var photo: PhotosPickerItem?
+    @State private var pickingImageFile = false
     @State private var pickingNewVersion = false
     @State private var updateReport: String?
 
@@ -38,6 +41,20 @@ struct PadDocumentView: View {
                 ThumbnailStrip(pdfView: editor.pdfView).frame(height: 92)
             }
         }
+        .fileImporter(isPresented: $pickingImageFile, allowedContentTypes: [.image]) { result in
+            guard case .success(let url) = result else { return }
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            if let data = try? Data(contentsOf: url) { editor.insertImage(data) } else { editor.objectNotice = "No se pudo abrir «\(url.lastPathComponent)»." }
+        }
+        .photosPicker(isPresented: $pickingPhoto, selection: $photo, matching: .images)
+        .onChange(of: photo) {
+            guard let item = photo else { return }
+            photo = nil
+            Task {
+                if let data = try? await item.loadTransferable(type: Data.self) { editor.insertImage(data) } else { editor.objectNotice = "No he podido leer esa foto." }
+            }
+        }
         .toolbar {
             ToolbarItem(placement: .principal) {
                 Picker("Modo", selection: $editor.mode) {
@@ -49,6 +66,21 @@ struct PadDocumentView: View {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 if editor.hasSelection {
                     Button("Resaltar", systemImage: "highlighter") { editor.highlightSelection() }
+                }
+                Menu("Insertar", systemImage: "plus.square.on.square") {
+                    Button("Cuadro de texto", systemImage: "textformat") { editor.mode = .text }
+                    Button("Imagen de Fotos", systemImage: "photo") { pickingPhoto = true }
+                    Button("Imagen de Archivos", systemImage: "folder") { pickingImageFile = true }
+                    Divider()
+                    Button("Tabla", systemImage: "tablecells") { editor.insertTable() }
+                    Button("Añadir fila a una tabla del PDF", systemImage: "rectangle.split.1x2") {
+                        editor.mode = .text
+                        editor.pendingGrow = .row
+                    }
+                    Button("Añadir columna a una tabla del PDF", systemImage: "rectangle.split.2x1") {
+                        editor.mode = .text
+                        editor.pendingGrow = .column
+                    }
                 }
                 Button("Deshacer", systemImage: "arrow.uturn.backward") { undoManager.undo() }
                 Button("Rehacer", systemImage: "arrow.uturn.forward") { undoManager.redo() }
@@ -90,13 +122,13 @@ struct PadDocumentView: View {
         .inspector(isPresented: $showAI) {
             PadAIPanel(assistant: assistant)
         }
-        .alert("Añadir texto", isPresented: $editor.showTextPrompt) {
-            TextField("Texto", text: $newText)
-            Button("Añadir") {
-                editor.addPendingText(newText)
-                newText = ""
-            }
-            Button("Cancelar", role: .cancel) { newText = "" }
+        .sheet(item: $editor.objectEdit) { edit in
+            ObjectEditSheet(edit: edit, editor: editor)
+        }
+        .alert("MDobe", isPresented: Binding(get: { editor.objectNotice != nil }, set: { if !$0 { editor.objectNotice = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(editor.objectNotice ?? "")
         }
         .fileImporter(isPresented: $pickingNewVersion, allowedContentTypes: [.pdf]) { result in
             guard case .success(let url) = result else { return }
@@ -109,6 +141,18 @@ struct PadDocumentView: View {
         }
         .navigationTitle(doc.name)
         .navigationBarTitleDisplayMode(.inline)
+        .overlay(alignment: .bottom) {
+            if let grow = editor.pendingGrow {
+                HStack {
+                    Label(grow == .row ? "Toca dentro de la tabla para añadirle una fila debajo" : "Toca dentro de la tabla para añadirle una columna a la derecha",
+                          systemImage: "tablecells")
+                    Button("Cancelar") { editor.pendingGrow = nil }
+                }
+                .padding(.horizontal, 14).padding(.vertical, 8)
+                .background(.regularMaterial, in: Capsule())
+                .padding()
+            }
+        }
         .overlay(alignment: .bottomTrailing) {
             if let status = doc.status, !editor.immersive || status.hasPrefix("No se pudo") {
                 Text(status).font(.caption).padding(6).background(.regularMaterial, in: Capsule()).padding(8)
