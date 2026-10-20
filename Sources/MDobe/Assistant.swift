@@ -145,7 +145,7 @@ final class Assistant {
             }
             prompt += "Petición del usuario: \(question)"
 
-            let reply = try await Gemini.askAPI(prompt: prompt, pdf: pdf)
+            let reply = try await Gemini.askAPI(prompt: prompt, pdf: pdf) { [self] in setLast($0) }
             let found = apply(reply.highlights)
             var text = reply.text
             if !reply.highlights.isEmpty {
@@ -165,7 +165,7 @@ final class Assistant {
             let reply = try await Gemini.askAPI(prompt: """
                 La imagen es un fragmento recuadrado de la página \(page) del PDF. Transcríbelo a LaTeX en un bloque $$...$$ \
                 (si hay varias líneas, usa un entorno aligned). Después explica de forma sencilla qué dice y qué significa cada símbolo.
-                """, pdf: nil, image: png)
+                """, pdf: nil, image: png) { [self] in setLast($0) }
             setLast(reply.text)
             history.append(("Fórmula de la página \(page)", reply.text))
         }

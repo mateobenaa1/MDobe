@@ -191,14 +191,15 @@ struct BlockEditor: View {
         aiBusy = true
         aiError = nil
         let request = aiPrompt, page = editor.currentPageIndex + 1, pdf = editor.document.dataRepresentation()
+        let before = text.isEmpty ? "" : text + "\n\n"
         Task {
             defer { aiBusy = false }
             do {
                 let reply = try await Gemini.askAPI(prompt: """
                     El usuario está en la página \(page). Escribe en Markdown con LaTeX ($...$ y $$...$$) el contenido que pide, \
                     listo para pegarlo en sus apuntes: sin saludos ni comentarios sobre lo que haces. Petición: \(request)
-                    """, pdf: pdf)
-                text += (text.isEmpty ? "" : "\n\n") + reply.text
+                    """, pdf: pdf) { text = before + $0 }
+                text = before + reply.text
                 aiPrompt = ""
             } catch {
                 aiError = error.localizedDescription

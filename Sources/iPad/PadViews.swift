@@ -302,7 +302,7 @@ final class PadAssistant {
                     prompt += "Conversación anterior:\n" + history.suffix(4).map { "Usuario: \($0.user)\nAsistente: \($0.model)" }.joined(separator: "\n\n") + "\n\n"
                 }
                 prompt += "Petición del usuario: \(question)"
-                let reply = try await Gemini.askAPI(prompt: prompt, pdf: pdf)
+                let reply = try await Gemini.askAPI(prompt: prompt, pdf: pdf) { [self] in setLast($0) }
                 var found = 0
                 editor.grouped("Resaltar") {
                     for h in reply.highlights where editor.highlight(text: h.phrase, note: h.note) { found += 1 }
