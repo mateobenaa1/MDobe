@@ -108,24 +108,35 @@ private struct LibrarySetup: View {
                     Text("Tus PDFs y apuntes, iguales en el Mac y en el iPad.")
                         .font(.title3).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 }
-                VStack(alignment: .leading, spacing: 16) {
-                    step(1, "Elige una carpeta en la nube", "Por ejemplo «MDobe» dentro de OneDrive (créala si no existe).", "icloud.and.arrow.up")
-                    step(2, "Un proyecto por asignatura", "Cada proyecto es una subcarpeta con sus PDFs y cuadernos.", "folder.fill")
-                    step(3, "Elige la misma en tus otros dispositivos", "Los apuntes van dentro de cada PDF, así que la nube lo sincroniza todo.", "arrow.triangle.2.circlepath")
-                }
-                .padding(20)
-                .card()
-                Button { picking = true } label: {
-                    Label("Elegir carpeta de la biblioteca", systemImage: "folder.badge.gearshape")
-                        .font(.headline).frame(maxWidth: 360).padding(.vertical, 6)
-                }
-                .buttonStyle(.borderedProminent).controlSize(.large)
-                if let openOther {
-                    Button("O abre un PDF suelto…", action: openOther).buttonStyle(.borderless)
+                // Lo principal es abrir un PDF; la biblioteca es opcional.
+                VStack(spacing: 10) {
+                    if let openOther {
+                        Button(action: openOther) {
+                            Label("Abrir un PDF", systemImage: "doc.badge.plus")
+                                .font(.headline).frame(maxWidth: 360).padding(.vertical, 6)
+                        }
+                        .buttonStyle(.borderedProminent).controlSize(.large)
+                    }
+                    Button { picking = true } label: {
+                        Label("Elegir carpeta de la biblioteca", systemImage: "folder.badge.gearshape")
+                            .font(.headline).frame(maxWidth: 360).padding(.vertical, 6)
+                    }
+                    .buttonStyle(.bordered).controlSize(.large)
                 }
                 if !recents.isEmpty {
                     RecentShelf(model: model, urls: recents, open: open)
                 }
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Biblioteca (opcional)").font(.headline)
+                    step("Una carpeta con tus proyectos", "Cada proyecto es una subcarpeta con sus PDFs y cuadernos.", "folder.fill")
+                    step("Igual en tus dispositivos", "Si la carpeta está en la nube, los apuntes se sincronizan solos (van dentro de cada PDF).", "arrow.triangle.2.circlepath")
+                    #if os(iOS)
+                    step("OneDrive en el iPad", "OneDrive no deja elegir carpetas desde el iPad: abre sus PDFs sueltos, o usa una carpeta de iCloud Drive o «En mi iPad».", "info.circle")
+                    #endif
+                }
+                .padding(20)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .card()
             }
             .padding(28)
             .frame(maxWidth: 640)
@@ -141,11 +152,11 @@ private struct LibrarySetup: View {
         }
     }
 
-    private func step(_ n: Int, _ title: String, _ detail: String, _ symbol: String) -> some View {
+    private func step(_ title: String, _ detail: String, _ symbol: String) -> some View {
         HStack(alignment: .top, spacing: 14) {
             Image(systemName: symbol).font(.title3).foregroundStyle(.tint).frame(width: 32)
             VStack(alignment: .leading, spacing: 3) {
-                Text("\(n). \(title)").font(.headline)
+                Text(title).font(.subheadline.weight(.semibold))
                 Text(detail).font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
         }
