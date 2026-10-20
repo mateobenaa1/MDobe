@@ -81,10 +81,10 @@ private struct FolderView: View {
     @State private var nameText = ""
     @State private var moving: LibraryItem?
     @State private var deleting: LibraryItem?
-    @State private var picker: FilePick?
+    @State private var importingPDFs = false
+    @State private var changingRoot = false
 
     private enum Naming: Equatable { case folder, notebook(PageFactory.Paper), rename(LibraryItem) }
-    private enum FilePick { case importPDFs, changeRoot }
 
     private var isRoot: Bool { folder == model.root }
     private var folders: [LibraryItem] { items.filter(\.isFolder) }
@@ -138,11 +138,15 @@ private struct FolderView: View {
             Text(deleting?.isFolder == true ? "Se elimina la carpeta con todo lo que contiene, en todos tus dispositivos." : "Se elimina en todos tus dispositivos.")
         }
         .sheet(item: $moving) { item in MoveSheet(model: model, item: item) }
-        .fileImporter(isPresented: Binding(get: { picker != nil }, set: { if !$0 { picker = nil } }),
-                      allowedContentTypes: picker == .changeRoot ? [.folder] : [.pdf],
-                      allowsMultipleSelection: picker == .importPDFs) { result in
-            guard case .success(let urls) = result else { return }
-            if picker == .changeRoot, let url = urls.first { model.setRoot(url) } else { _ = receive(urls, into: folder) }
+        // Dos selectores en vistas distintas: uno solo que cambiaba de tipo a veces salía con el de PDFs
+        // al pedir la carpeta, y la biblioteca acababa siendo un PDF.
+        .fileImporter(isPresented: $importingPDFs, allowedContentTypes: [.pdf], allowsMultipleSelection: true) { result in
+            if case .success(let urls) = result { _ = receive(urls, into: folder) }
+        }
+        .background {
+            Color.clear.fileImporter(isPresented: $changingRoot, allowedContentTypes: [.folder]) { result in
+                if case .success(let url) = result { model.setRoot(url) }
+            }
         }
     }
 
@@ -156,7 +160,7 @@ private struct FolderView: View {
                         Button("Hojas \(paper.rawValue)") { ask(.notebook(paper)) }
                     }
                 }
-                Button("Importar PDFs…", systemImage: "square.and.arrow.down") { picker = .importPDFs }
+                Button("Importar PDFs…", systemImage: "square.and.arrow.down") { importingPDFs = true }
             }
             Menu("Opciones", systemImage: "ellipsis.circle") {
                 Picker("Ordenar por", selection: $sort) {
@@ -164,7 +168,7 @@ private struct FolderView: View {
                 }
                 if isRoot {
                     Divider()
-                    Button("Cambiar carpeta de la biblioteca…") { picker = .changeRoot }
+                    Button("Cambiar carpeta de la biblioteca…") { changingRoot = true }
                 }
             }
         }

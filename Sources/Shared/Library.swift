@@ -20,13 +20,24 @@ final class LibraryModel {
         var stale = false
         guard let url = try? URL(resolvingBookmarkData: data, bookmarkDataIsStale: &stale) else { return }
         _ = url.startAccessingSecurityScopedResource() // mientras la app viva (en iOS da acceso a todo lo de dentro)
+        // Un PDF elegido por error como biblioteca: se olvida y se vuelve a pedir la carpeta.
+        guard Self.isFolder(url) else {
+            url.stopAccessingSecurityScopedResource()
+            UserDefaults.standard.removeObject(forKey: Self.rootKey)
+            return
+        }
         root = url
         if stale, let fresh = try? url.bookmarkData() { UserDefaults.standard.set(fresh, forKey: Self.rootKey) }
     }
 
     func setRoot(_ url: URL) {
-        root?.stopAccessingSecurityScopedResource()
-        _ = url.startAccessingSecurityScopedResource()
+        let scoped = url.startAccessingSecurityScopedResource()
+        guard Self.isFolder(url) else {
+            if scoped { url.stopAccessingSecurityScopedResource() }
+            error = "«\(url.lastPathComponent)» es un archivo, no una carpeta. Elige la carpeta donde guardas tus PDFs (p. ej. «MDobe» en OneDrive)."
+            return
+        }
+        if root != url { root?.stopAccessingSecurityScopedResource() }
         guard let data = try? url.bookmarkData() else {
             error = "No puedo recordar la carpeta «\(url.lastPathComponent)». Prueba con otra."
             return
@@ -38,6 +49,11 @@ final class LibraryModel {
     }
 
     func changed() { revision += 1 }
+
+    private static func isFolder(_ url: URL) -> Bool {
+        if let dir = try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory { return dir }
+        return url.pathExtension.isEmpty
+    }
 
     func contains(_ url: URL) -> Bool {
         guard let root else { return false }
