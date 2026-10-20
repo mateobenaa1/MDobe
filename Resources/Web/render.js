@@ -5,6 +5,18 @@ function escapeHTML(s) {
   return s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 }
 
+// El texto viene de la IA (y del PDF que lee): no se deja pasar HTML propio ni enlaces javascript:.
+// Solo sobreviven etiquetas de formato sin atributos (p. ej. <br> en tablas, <sub>, <sup>).
+const SAFE_TAG = /&lt;(\/?)(br|sub|sup|b|i|em|strong|u|s|del|ins|mark|small|kbd|hr)\s*(\/?)&gt;/gi;
+const SAFE_URL = /^(https?:|mailto:|mdobe:|#)/i;
+marked.use({
+  renderer: {
+    html({ text }) { return escapeHTML(text).replace(SAFE_TAG, '<$1$2$3>'); },
+    link({ href, tokens }) { return SAFE_URL.test(href.trim()) ? false : this.parser.parseInline(tokens); },
+    image({ href, text }) { return SAFE_URL.test(href.trim()) || /^data:image\//i.test(href) ? false : escapeHTML(text); },
+  },
+});
+
 // La matemática se aparta antes de Markdown (que estropearía _ y \) y se vuelve a poner ya renderizada.
 function renderText(text, markdown = true, linkPages = true) {
   const math = [];

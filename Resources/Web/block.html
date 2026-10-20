@@ -2,6 +2,7 @@
 <html lang="es">
 <head>
 <meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src file: data:; font-src file: data:; script-src file:; style-src file: 'unsafe-inline'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <link rel="stylesheet" href="katex.min.css">
 <script src="katex.min.js"></script>
 <script src="marked.min.js"></script>
@@ -22,17 +23,6 @@
 </head>
 <body>
 <div id="block"></div>
-<script>
-// Llamado desde Swift. Devuelve la altura del bloque en pt.
-// width = 0 → ocupar todo el ancho (vista previa).
-async function setContent(text, width, plain) {
-  const b = document.getElementById('block');
-  b.style.width = width ? width + 'px' : '100%';
-  b.className = plain ? 'plain' : '';
-  b.innerHTML = renderText(text, true, false);
-  await document.fonts.ready; // las fuentes de KaTeX cambian la altura al cargar
-  return Math.ceil(b.getBoundingClientRect().height);
-}
-</script>
+<script src="block.js"></script>
 </body>
 </html>

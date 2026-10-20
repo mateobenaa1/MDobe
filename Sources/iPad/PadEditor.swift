@@ -34,6 +34,8 @@ final class PadEditor: ObjectEditing {
     @ObservationIgnored private let ink = InkOverlay()
     @ObservationIgnored private var taps: [UITapGestureRecognizer] = []
     @ObservationIgnored private var tapHandler: TapHandler?
+    /// Observadores de NotificationCenter (con bloque): se quitan al liberar el editor.
+    @ObservationIgnored nonisolated(unsafe) private var observers: [NSObjectProtocol] = []
     @ObservationIgnored private var eraserPans: [UIPanGestureRecognizer] = []
     @ObservationIgnored private var erased: [(PDFAnnotation, PDFPage)] = []
     var undoManager: UndoManager?
@@ -146,25 +148,29 @@ final class PadEditor: ObjectEditing {
         }
         applyMode()
 
-        NotificationCenter.default.addObserver(forName: .PDFViewScaleChanged, object: pdfView, queue: .main) { [weak self] _ in
+        observers.append(NotificationCenter.default.addObserver(forName: .PDFViewScaleChanged, object: pdfView, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.ink.zoomChanged() }
-        }
-        NotificationCenter.default.addObserver(forName: .PDFViewScaleChanged, object: notesView, queue: .main) { [weak self] _ in
+        })
+        observers.append(NotificationCenter.default.addObserver(forName: .PDFViewScaleChanged, object: notesView, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.notesInk.zoomChanged() }
-        }
-        NotificationCenter.default.addObserver(forName: .PDFViewPageChanged, object: pdfView, queue: .main) { [weak self] _ in
+        })
+        observers.append(NotificationCenter.default.addObserver(forName: .PDFViewPageChanged, object: pdfView, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.refreshNotes() }
-        }
-        NotificationCenter.default.addObserver(forName: .PDFViewPageChanged, object: notesView, queue: .main) { [weak self] _ in
+        })
+        observers.append(NotificationCenter.default.addObserver(forName: .PDFViewPageChanged, object: notesView, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.refreshNotes() }
-        }
+        })
         refreshNotes()
-        NotificationCenter.default.addObserver(forName: .PDFViewSelectionChanged, object: pdfView, queue: .main) { [weak self] _ in
+        observers.append(NotificationCenter.default.addObserver(forName: .PDFViewSelectionChanged, object: pdfView, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.hasSelection = !(self.pdfView.currentSelection?.string ?? "").trimmingCharacters(in: .whitespaces).isEmpty
             }
-        }
+        })
+    }
+
+    deinit {
+        for o in observers { NotificationCenter.default.removeObserver(o) }
     }
 
     private func applyMode() {

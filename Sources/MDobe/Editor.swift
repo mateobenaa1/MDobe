@@ -72,6 +72,8 @@ final class Editor: ObjectEditing {
     private(set) var results: [PDFSelection] = []
     private(set) var resultIndex = 0
     private var lastQuery = ""
+    /// Observadores de NotificationCenter (con bloque): se quitan al liberar el objeto.
+    @ObservationIgnored nonisolated(unsafe) private var observers: [NSObjectProtocol] = []
 
     init(document: PDFDocument) {
         self.document = document
@@ -82,9 +84,13 @@ final class Editor: ObjectEditing {
         pdfView.editor = self
         PageObjects.adopt(in: document)
         suggestOCR = document.pageCount > 0 && (0..<min(3, document.pageCount)).allSatisfy(isScanned)
-        NotificationCenter.default.addObserver(forName: .PDFViewAnnotationHit, object: pdfView, queue: .main) { [weak self] n in
+        observers.append(NotificationCenter.default.addObserver(forName: .PDFViewAnnotationHit, object: pdfView, queue: .main) { [weak self] n in
             MainActor.assumeIsolated { self?.widgetHit(n) }
-        }
+        })
+    }
+
+    deinit {
+        for o in observers { NotificationCenter.default.removeObserver(o) }
     }
 
     func isScanned(_ index: Int) -> Bool {

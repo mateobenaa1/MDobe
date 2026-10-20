@@ -94,6 +94,8 @@ final class OpenDoc: Identifiable {
     @ObservationIgnored private var saveTask: Task<Void, Never>?
     /// Lo que se escribe en el archivo (el editor añade las hojas del cuaderno). Sin él, el PDF tal cual.
     @ObservationIgnored var export: (() -> Data?)?
+    /// Observadores de NotificationCenter (con bloque): se quitan al liberar el objeto.
+    @ObservationIgnored nonisolated(unsafe) private var observers: [NSObjectProtocol] = []
 
     var name: String { url.deletingPathExtension().lastPathComponent }
 
@@ -102,10 +104,14 @@ final class OpenDoc: Identifiable {
         self.pdf = pdf
         self.scoped = scoped
         for name in [Notification.Name.NSUndoManagerDidCloseUndoGroup, .NSUndoManagerDidUndoChange, .NSUndoManagerDidRedoChange] {
-            NotificationCenter.default.addObserver(forName: name, object: undoManager, queue: .main) { [weak self] _ in
+            observers.append(NotificationCenter.default.addObserver(forName: name, object: undoManager, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.changed() }
-            }
+            })
         }
+    }
+
+    deinit {
+        for o in observers { NotificationCenter.default.removeObserver(o) }
     }
 
     private func changed() {

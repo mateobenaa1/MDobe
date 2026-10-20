@@ -1,6 +1,7 @@
 #!/bin/zsh
 # Compila MDobe para iPad firmado con el Apple ID gratuito de Xcode y lo instala en el iPad (cable o wifi).
-# Con --if-due solo actúa si la última instalación tiene más de 4 días (lo usa la tarea automática).
+# Con --if-due solo actúa si la última instalación tiene más de 4 días (lo usa la tarea automática, que corre
+# desde la copia de ~/Library/Application Support/MDobe/ipad-src: ver install-ipad-agent.sh).
 set -e
 cd "$(dirname "$0")/.."
 STAMP="$HOME/Library/Application Support/MDobe/ipad-last-install"
@@ -38,3 +39,6 @@ xcodebuild -project MDobe.xcodeproj -scheme MDobeiPad -configuration Release -de
 xcrun devicectl device install app --device "$DEVICE" build/ios-signed/Build/Products/Release-iphoneos/MDobe.app >/dev/null
 date +%s > "$STAMP"
 log "MDobe instalado en el iPad (válido 7 días; se renueva solo)."
+# Ejecutado desde el repo: actualiza la copia que usa la tarea automática con este código
+[[ -x scripts/install-ipad-agent.sh && "$PWD" != "$HOME/Library/Application Support/MDobe/ipad-src" ]] && ./scripts/install-ipad-agent.sh --sync-only
+exit 0
