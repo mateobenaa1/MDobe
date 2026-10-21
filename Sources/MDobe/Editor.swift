@@ -60,6 +60,8 @@ final class Editor: ObjectEditing {
     var pendingBlock: (text: String, plain: Bool)?
     /// Recibe la imagen PNG de una fórmula recuadrada y su número de página (1…).
     @ObservationIgnored var onFormula: ((Data, Int) -> Void)?
+    /// Capa que pinta la tinta nítida a la resolución del zoom (PDFKit la deja borrosa).
+    @ObservationIgnored private let ink = InkOverlay(drawsObjects: false)
     /// Cuadro de texto o tabla que se está editando (se muestra como hoja).
     var objectEdit: ObjectEdit?
     var objectNotice: String?
@@ -77,16 +79,23 @@ final class Editor: ObjectEditing {
 
     init(document: PDFDocument) {
         self.document = document
+        // La capa de tinta tiene que estar antes que el documento: si no, PDFKit no la usa.
+        ink.pdfView = pdfView
+        pdfView.pageOverlayViewProvider = ink
+        SmoothInk.drawnElsewhere = { $0.rotation == 0 && InkOverlay.covers($0) }
+        SmoothInk.adopt(in: document)
         pdfView.document = document
         pdfView.autoScales = true
         pdfView.displayMode = .singlePageContinuous
         pdfView.backgroundColor = .underPageBackgroundColor
         pdfView.editor = self
-        SmoothInk.adopt(in: document)
         PageObjects.adopt(in: document)
         suggestOCR = document.pageCount > 0 && (0..<min(3, document.pageCount)).allSatisfy(isScanned)
         observers.append(NotificationCenter.default.addObserver(forName: .PDFViewAnnotationHit, object: pdfView, queue: .main) { [weak self] n in
             MainActor.assumeIsolated { self?.widgetHit(n) }
+        })
+        observers.append(NotificationCenter.default.addObserver(forName: .PDFViewScaleChanged, object: pdfView, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.ink.zoomChanged() }
         })
     }
 
@@ -109,11 +118,13 @@ final class Editor: ObjectEditing {
     func add(_ a: PDFAnnotation, to page: PDFPage) {
         a.shouldPrint = true
         page.addAnnotation(a)
+        if a is SmoothInk { ink.render(page) }
         undoManager?.registerUndo(withTarget: self) { $0.remove(a, from: page) }
     }
 
     func remove(_ a: PDFAnnotation, from page: PDFPage) {
         page.removeAnnotation(a)
+        if a is SmoothInk { ink.render(page) }
         undoManager?.registerUndo(withTarget: self) { $0.add(a, to: page) }
     }
 
@@ -314,6 +325,8 @@ final class Editor: ObjectEditing {
             document.removePage(at: i)
             document.insert(to, at: i)
         }
+        ink.forgetCache()
+        ink.renderAll()
         undoManager?.registerUndo(withTarget: self) { $0.exchange(pairs.map { ($0.to, $0.from) }) }
     }
 
@@ -429,6 +442,8 @@ final class Editor: ObjectEditing {
         let index = currentPageIndex
         let undo = PDFUpdate.apply(pages, moves, to: document)
         pdfView.layoutDocumentView()
+        ink.forgetCache()
+        ink.renderAll()
         if let page = document.page(at: min(index, document.pageCount - 1)) { pdfView.go(to: page) }
         undoManager?.registerUndo(withTarget: self) { $0.replacePages(undo.pages, undo.moves) }
     }

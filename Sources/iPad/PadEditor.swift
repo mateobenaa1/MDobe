@@ -31,7 +31,7 @@ final class PadEditor: ObjectEditing {
     let document: PDFDocument
     let pdfView = PDFView()
     @ObservationIgnored private let pencil = PencilLayer()
-    @ObservationIgnored private let ink = InkOverlay()
+    @ObservationIgnored private let ink = InkOverlay(drawsObjects: true)
     @ObservationIgnored private var taps: [UITapGestureRecognizer] = []
     @ObservationIgnored private var tapHandler: TapHandler?
     /// Observadores de NotificationCenter (con bloque): se quitan al liberar el editor.
@@ -63,7 +63,7 @@ final class PadEditor: ObjectEditing {
     /// Cuaderno: hojas de apuntes de cada página, al lado del PDF. Cada página tiene su propio documento de hojas.
     let notesView = PDFView()
     @ObservationIgnored private let notesPencil = PencilLayer()
-    @ObservationIgnored private let notesInk = InkOverlay()
+    @ObservationIgnored private let notesInk = InkOverlay(drawsObjects: true)
     @ObservationIgnored private var notes: [PDFPage: PDFDocument] = [:]
     var showNotes = UserDefaults.standard.bool(forKey: "pad.showNotes") {
         didSet {
