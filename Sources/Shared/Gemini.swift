@@ -11,12 +11,13 @@ enum Gemini {
     }
 
     enum Failure: LocalizedError {
-        case noKey, badKey, rateLimited, tooLarge, other(String)
+        case noKey, badKey, rateLimited, overloaded, tooLarge, other(String)
         var errorDescription: String? {
             switch self {
             case .noKey: "Pega tu clave gratuita de Gemini en el panel (aistudio.google.com/apikey)."
             case .badKey: "Google ha rechazado la clave. Revísala en el panel."
             case .rateLimited: "Has llegado al límite gratuito por ahora. Espera un poco o usa Apple mientras tanto."
+            case .overloaded: "Los servidores de Gemini están saturados ahora mismo. Vuelve a intentarlo en un minuto o usa Apple mientras tanto."
             case .tooLarge: "El PDF es demasiado grande para enviarlo (máx. ~18 MB)."
             case .other(let msg): msg
             }
@@ -88,7 +89,8 @@ enum Gemini {
     static func saveKey(_ k: String) { Keychain.write(k.trimmingCharacters(in: .whitespacesAndNewlines), account: "gemini-api") }
 
     private static let base = "https://generativelanguage.googleapis.com"
-    private static let model = "gemini-flash-latest"
+    /// Si el modelo principal está saturado (503), se prueba con el ligero, que tiene su propia capacidad.
+    private static let models = ["gemini-flash-latest", "gemini-flash-lite-latest"]
     /// Razonamiento corto: la mayor parte de la espera era el modelo "pensando". Si el modelo
     /// no admite `thinkingLevel`, se desactiva y se repite sin él.
     nonisolated(unsafe) private static var useThinkingLevel = true
@@ -111,6 +113,7 @@ enum Gemini {
         }
 
         var attempt = 0
+        var modelIndex = 0
         while true {
             attempt += 1
             var parts: [[String: Any]] = []
@@ -124,7 +127,7 @@ enum Gemini {
                 "contents": [["role": "user", "parts": parts]],
                 "generationConfig": config,
             ]
-            var req = URLRequest(url: URL(string: "\(base)/v1beta/models/\(model):streamGenerateContent?alt=sse")!, timeoutInterval: 180)
+            var req = URLRequest(url: URL(string: "\(base)/v1beta/models/\(models[modelIndex]):streamGenerateContent?alt=sse")!, timeoutInterval: 180)
             req.httpMethod = "POST"
             req.setValue(key, forHTTPHeaderField: "x-goog-api-key")
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -155,10 +158,16 @@ enum Gemini {
                     continue
                 case 400 where message?.localizedCaseInsensitiveContains("API key") == true, 401, 403: throw Failure.badKey
                 case 429: throw Failure.rateLimited
-                case 500...504 where attempt < 3:
+                case 500...504 where attempt < 2:
                     // Sobrecarga momentánea de Google: reintenta tras una pausa.
-                    try await Task.sleep(for: .seconds(2 * attempt))
+                    try await Task.sleep(for: .seconds(2))
                     continue
+                case 500...504 where modelIndex + 1 < models.count:
+                    // Sigue saturado: pasa al modelo ligero.
+                    modelIndex += 1
+                    attempt = 0
+                    continue
+                case 500...504: throw Failure.overloaded
                 default: throw Failure.other("Error \(status): \(message ?? String(decoding: data.prefix(300), as: UTF8.self))")
                 }
             }
