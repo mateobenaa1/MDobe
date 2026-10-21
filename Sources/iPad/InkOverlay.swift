@@ -8,10 +8,8 @@ import UIKit
 final class InkOverlay: NSObject, PDFPageOverlayViewProvider {
     weak var pdfView: PDFView?
     private var views: [PDFPage: UIImageView] = [:]
-    private var cache: [ObjectIdentifier: [Line]] = [:]
+    private var cache: [ObjectIdentifier: [SmoothInk.Line]] = [:]
     private var pending: DispatchWorkItem?
-
-    static let widthsKey = PDFAnnotationKey(rawValue: "/MDobeW")
 
     /// Páginas que tienen capa de tinta en pantalla. Si una página no la tiene (p. ej. recién insertada),
     /// SmoothInk se dibuja ella misma para que el trazo no desaparezca. PDFKit dibuja en otros hilos: va con candado.
@@ -76,58 +74,15 @@ final class InkOverlay: NSObject, PDFPageOverlayViewProvider {
                 objects.forEach { $0.drawContent(in: cg) }
                 cg.restoreGState()
             }
-            cg.setLineCap(.round)
-            cg.setLineJoin(.round)
-            for (lines, color) in inks {
-                cg.setStrokeColor(color.withAlphaComponent(1).cgColor)
-                for line in lines {
-                    // Segmento a segmento con el grosor de cada punto (presión del Pencil).
-                    for i in line.points.indices.dropFirst() {
-                        cg.setLineWidth((line.widths[i - 1] + line.widths[i]) / 2)
-                        cg.move(to: line.points[i - 1])
-                        cg.addLine(to: line.points[i])
-                        cg.strokePath()
-                    }
-                    if line.points.count == 1, let p = line.points.first {
-                        let r = line.widths[0] / 2
-                        cg.setFillColor(color.cgColor)
-                        cg.fillEllipse(in: CGRect(x: p.x - r, y: p.y - r, width: 2 * r, height: 2 * r))
-                    }
-                }
-            }
+            for (lines, color) in inks { SmoothInk.stroke(lines, color: color, in: cg) }
         }
     }
 
-    private struct Line {
-        var points: [CGPoint]
-        var widths: [CGFloat]
-    }
-
-    /// Puntos (en coordenadas de la vista, origen arriba) y grosor guardado de cada punto.
-    private func stroke(for a: SmoothInk, box: CGRect) -> [Line] {
+    /// Puntos en coordenadas de la vista (origen arriba).
+    private func stroke(for a: SmoothInk, box: CGRect) -> [SmoothInk.Line] {
         if let cached = cache[ObjectIdentifier(a)] { return cached }
-        let widths = (a.value(forAnnotationKey: Self.widthsKey) as? String)?.split(separator: ",").compactMap { Double($0) }.map { CGFloat($0) } ?? []
-        let fallback = a.border?.lineWidth ?? 1.5
-        var result: [Line] = []
-        var w = 0
-        for path in a.paths ?? [] {
-            var pts: [CGPoint] = []
-            path.cgPath.applyWithBlock { el in
-                let e = el.pointee
-                switch e.type {
-                case .moveToPoint, .addLineToPoint: pts.append(e.points[0])
-                case .addQuadCurveToPoint: pts.append(e.points[1])
-                case .addCurveToPoint: pts.append(e.points[2])
-                default: break
-                }
-            }
-            var line = Line(points: [], widths: [])
-            for p in pts {
-                line.points.append(CGPoint(x: a.bounds.minX + p.x - box.minX, y: box.maxY - (a.bounds.minY + p.y)))
-                line.widths.append(w < widths.count ? widths[w] : fallback)
-                w += 1
-            }
-            if !line.points.isEmpty { result.append(line) }
+        let result = a.lines().map { line in
+            SmoothInk.Line(points: line.points.map { CGPoint(x: $0.x - box.minX, y: box.maxY - $0.y) }, widths: line.widths)
         }
         cache[ObjectIdentifier(a)] = result
         return result

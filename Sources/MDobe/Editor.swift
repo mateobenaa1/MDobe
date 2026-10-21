@@ -82,6 +82,7 @@ final class Editor: ObjectEditing {
         pdfView.displayMode = .singlePageContinuous
         pdfView.backgroundColor = .underPageBackgroundColor
         pdfView.editor = self
+        SmoothInk.adopt(in: document)
         PageObjects.adopt(in: document)
         suggestOCR = document.pageCount > 0 && (0..<min(3, document.pageCount)).allSatisfy(isScanned)
         observers.append(NotificationCenter.default.addObserver(forName: .PDFViewAnnotationHit, object: pdfView, queue: .main) { [weak self] n in
@@ -185,7 +186,7 @@ final class Editor: ObjectEditing {
         let bounds = path.bounds.insetBy(dx: -width * 2, dy: -width * 2)
         let local = path.copy() as! NSBezierPath
         local.transform(using: AffineTransform(translationByX: -bounds.minX, byY: -bounds.minY))
-        let a = PDFAnnotation(bounds: bounds, forType: .ink, withProperties: nil)
+        let a = SmoothInk(bounds: bounds, forType: .ink, withProperties: nil)
         a.add(local)
         a.color = color ?? nsColor
         a.border = PDFBorder()

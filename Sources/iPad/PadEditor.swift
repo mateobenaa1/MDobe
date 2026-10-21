@@ -89,6 +89,7 @@ final class PadEditor: ObjectEditing {
         SmoothInk.adopt(in: document)
         PageObjects.adopt(in: document)
         MovableAnnotation.drawnElsewhere = { $0.rotation == 0 && InkOverlay.covers($0) }
+        SmoothInk.drawnElsewhere = MovableAnnotation.drawnElsewhere
         notesPencil.editor = self
         notesInk.pdfView = notesView
         notesView.pageOverlayViewProvider = notesInk
@@ -366,7 +367,7 @@ final class PadEditor: ObjectEditing {
         a.color = color
         a.border = PDFBorder()
         a.border?.lineWidth = width
-        a.setValue(widths.map { String(format: "%.2f", $0) }.joined(separator: ","), forAnnotationKey: InkOverlay.widthsKey)
+        a.setValue(widths.map { String(format: "%.2f", $0) }.joined(separator: ","), forAnnotationKey: SmoothInk.widthsKey)
         add(a, to: page)
     }
 
@@ -816,48 +817,6 @@ final class PencilLayer: NSObject, PKCanvasViewDelegate {
         MainActor.assumeIsolated {
             guard let pdfView else { return }
             editor?.commit(strokes, from: canvas, in: pdfView)
-        }
-    }
-}
-
-/// Tinta dibujada por nosotros: PDFKit en iPad pinta las anotaciones de tinta sin suavizar (se ven pixeladas).
-/// En el archivo se guarda como una anotación de tinta normal.
-final class SmoothInk: PDFAnnotation {
-    override func draw(with box: PDFDisplayBox, in context: CGContext) {
-        if let page, page.rotation == 0, InkOverlay.covers(page) { return } // la dibuja InkOverlay
-        guard let paths, !paths.isEmpty else { return super.draw(with: box, in: context) }
-        UIGraphicsPushContext(context)
-        context.saveGState()
-        context.setShouldAntialias(true)
-        context.translateBy(x: bounds.minX, y: bounds.minY) // los trazos van relativos al origen de la anotación
-        color.setStroke()
-        for path in paths {
-            let p = path.copy() as! UIBezierPath
-            p.lineWidth = border?.lineWidth ?? 1
-            p.lineCapStyle = .round
-            p.lineJoinStyle = .round
-            p.stroke()
-        }
-        context.restoreGState()
-        UIGraphicsPopContext()
-    }
-
-    /// Sustituye la tinta existente del documento por SmoothInk (sin pasar por deshacer).
-    static func adopt(in document: PDFDocument) {
-        for i in 0..<document.pageCount {
-            guard let page = document.page(at: i) else { continue }
-            for old in page.annotations where old.type == "Ink" && !(old is SmoothInk) {
-                guard let paths = old.paths else { continue }
-                let new = SmoothInk(bounds: old.bounds, forType: .ink, withProperties: nil)
-                paths.forEach { new.add($0) }
-                new.color = old.color
-                new.border = old.border
-                new.contents = old.contents
-                new.shouldPrint = old.shouldPrint
-                if let w = old.value(forAnnotationKey: InkOverlay.widthsKey) { new.setValue(w, forAnnotationKey: InkOverlay.widthsKey) }
-                page.removeAnnotation(old)
-                page.addAnnotation(new)
-            }
         }
     }
 }
