@@ -22,6 +22,7 @@ struct PadDocumentView: View {
         let editor = PadEditor(document: doc.pdf)
         editor.undoManager = doc.undoManager
         doc.export = { [weak editor] in editor?.fileData() }
+        doc.currentPage = { [weak editor] in editor?.currentPageIndex ?? 0 }
         _editor = State(initialValue: editor)
         _assistant = State(initialValue: PadAssistant(editor: editor))
     }
@@ -157,6 +158,13 @@ struct PadDocumentView: View {
             if let status = doc.status, !editor.immersive || status.hasPrefix("No se pudo") {
                 Text(status).font(.caption).padding(6).background(.regularMaterial, in: Capsule()).padding(8)
             }
+        }
+        .task {
+            // Tras recargar, seguir en la misma página (el PDFView necesita estar maquetado para moverse).
+            guard doc.startPage > 0 else { return }
+            try? await Task.sleep(for: .milliseconds(100))
+            editor.pdfView.layoutDocumentView()
+            editor.goToPage(doc.startPage + 1)
         }
         .alert("Este PDF ha cambiado en otro dispositivo", isPresented: .constant(doc.conflict)) {
             Button("Guardar los dos") { Task { await doc.keepBoth() } }

@@ -76,7 +76,7 @@ final class PadLibrary {
                 let data = try await Task.detached { try LibraryFS.read(url) }.value
                 guard current === doc, let pdf = PDFDocument(data: data) else { return }
                 let note = doc.status?.hasPrefix("Tus cambios") == true ? doc.status : "Actualizado con los cambios de otro dispositivo"
-                show(OpenDoc(url: url, pdf: pdf, scoped: doc.handOff(), status: note))
+                show(OpenDoc(url: url, pdf: pdf, scoped: doc.handOff(), status: note, startPage: doc.currentPage?() ?? 0))
             } catch {
                 self.error = "No se pudo recargar «\(url.lastPathComponent)»: \(error.localizedDescription)"
             }
@@ -124,14 +124,19 @@ final class OpenDoc: Identifiable {
     @ObservationIgnored var export: (() -> Data?)?
     /// Vuelve a abrir el archivo desde disco (lo pone la biblioteca).
     @ObservationIgnored var reload: (() -> Void)?
+    /// Página que se está viendo (la pone el editor), para que al recargar se siga en ella.
+    @ObservationIgnored var currentPage: (() -> Int)?
+    /// Página en la que abrir (0 = primera).
+    let startPage: Int
     /// Observadores de NotificationCenter (con bloque): se quitan al liberar el objeto.
     @ObservationIgnored nonisolated(unsafe) private var observers: [NSObjectProtocol] = []
 
     var name: String { url.deletingPathExtension().lastPathComponent }
 
-    init(url: URL, pdf: PDFDocument, scoped: Bool, status: String? = nil) {
+    init(url: URL, pdf: PDFDocument, scoped: Bool, status: String? = nil, startPage: Int = 0) {
         self.url = url
         self.pdf = pdf
+        self.startPage = startPage
         self.scoped = scoped
         self.status = status
         known = LibraryFS.modified(url)
