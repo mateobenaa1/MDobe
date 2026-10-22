@@ -158,6 +158,13 @@ struct PadDocumentView: View {
                 Text(status).font(.caption).padding(6).background(.regularMaterial, in: Capsule()).padding(8)
             }
         }
+        .alert("Este PDF ha cambiado en otro dispositivo", isPresented: .constant(doc.conflict)) {
+            Button("Guardar los dos") { Task { await doc.keepBoth() } }
+            Button("Usar la del otro dispositivo", role: .destructive) { doc.useTheirs() }
+            Button("Quedarme con la mía", role: .destructive) { Task { await doc.keepMine() } }
+        } message: {
+            Text("Tienes cambios aquí sin guardar. «Guardar los dos» deja los tuyos en una copia «\(doc.name) (iPad)».")
+        }
     }
 }
 

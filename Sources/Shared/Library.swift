@@ -171,12 +171,27 @@ enum LibraryFS {
         return try result.get()
     }
 
-    static func write(_ data: Data, to url: URL) throws {
+    /// `presenter`: quien escribe, para que no reciba el aviso de su propio cambio.
+    static func write(_ data: Data, to url: URL, presenter: NSFilePresenter? = nil) throws {
         var coordError: NSError?, writeError: Error?
-        NSFileCoordinator().coordinate(writingItemAt: url, options: .forReplacing, error: &coordError) { u in
+        NSFileCoordinator(filePresenter: presenter).coordinate(writingItemAt: url, options: .forReplacing, error: &coordError) { u in
             do { try data.write(to: u, options: .atomic) } catch { writeError = error }
         }
         if let error = coordError ?? writeError { throw error }
+    }
+
+    /// Fecha de modificación actual (sin caché): sirve para saber si otro dispositivo ha cambiado el archivo.
+    static func modified(_ url: URL) -> Date? {
+        var url = url
+        url.removeAllCachedResourceValues()
+        return (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+    }
+
+    /// Guarda `data` como «Nombre (sufijo).pdf» junto a `url`, sin pisar nada.
+    static func writeCopy(_ data: Data, besides url: URL, suffix: String) throws -> URL {
+        let dst = unique("\(url.deletingPathExtension().lastPathComponent) (\(suffix))", ext: url.pathExtension.isEmpty ? nil : url.pathExtension, in: url.deletingLastPathComponent())
+        try write(data, to: dst)
+        return dst
     }
 
     // MARK: Organizar
