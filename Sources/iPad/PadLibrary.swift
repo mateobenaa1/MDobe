@@ -12,6 +12,8 @@ final class PadLibrary {
         let bookmark: Data
     }
 
+    /// PDFs abiertos, uno por pestaña. `current` es la pestaña que se ve (nil = la biblioteca).
+    private(set) var tabs: [OpenDoc] = []
     private(set) var current: OpenDoc?
     private(set) var recents: [Recent] = []
     private(set) var opening = false
@@ -25,6 +27,7 @@ final class PadLibrary {
     }
 
     func open(_ url: URL) {
+        if let tab = tabs.first(where: { $0.url.standardizedFileURL == url.standardizedFileURL }) { return select(tab) }
         guard !opening else { return }
         opening = true
         let scoped = url.startAccessingSecurityScopedResource()
@@ -33,7 +36,6 @@ final class PadLibrary {
             do {
                 let data = try await Task.detached { try LibraryFS.read(url) }.value
                 guard let pdf = PDFDocument(data: data) else { throw CocoaError(.fileReadCorruptFile) }
-                await current?.close()
                 show(OpenDoc(url: url, pdf: pdf, scoped: scoped))
                 remember(url)
             } catch {
@@ -62,30 +64,49 @@ final class PadLibrary {
         }
     }
 
-    private func show(_ doc: OpenDoc) {
+    /// Abre `doc` en una pestaña nueva o en la de `old` (al recargar).
+    private func show(_ doc: OpenDoc, replacing old: OpenDoc? = nil) {
         doc.reload = { [weak self, weak doc] in if let doc { self?.reload(doc) } }
+        if let old, let i = tabs.firstIndex(where: { $0 === old }) {
+            tabs[i] = doc
+            if current === old { current = doc }
+        } else {
+            tabs.append(doc)
+            current = doc
+        }
+    }
+
+    func select(_ doc: OpenDoc) {
         current = doc
+        doc.checkForChanges()
+    }
+
+    /// Vuelve a la biblioteca sin cerrar las pestañas.
+    func showLibrary() {
+        current = nil
     }
 
     /// Cambia el documento abierto por la versión que hay ahora en el archivo (la de otro dispositivo).
     private func reload(_ doc: OpenDoc) {
-        guard current === doc else { return }
+        guard tabs.contains(where: { $0 === doc }) else { return }
         let url = doc.url
         Task {
             do {
                 let data = try await Task.detached { try LibraryFS.read(url) }.value
-                guard current === doc, let pdf = PDFDocument(data: data) else { return }
+                guard tabs.contains(where: { $0 === doc }), let pdf = PDFDocument(data: data) else { return }
                 let note = doc.status?.hasPrefix("Tus cambios") == true ? doc.status : "Actualizado con los cambios de otro dispositivo"
-                show(OpenDoc(url: url, pdf: pdf, scoped: doc.handOff(), status: note, startPage: doc.currentPage?() ?? 0))
+                show(OpenDoc(url: url, pdf: pdf, scoped: doc.handOff(), status: note, startPage: doc.currentPage?() ?? 0), replacing: doc)
             } catch {
                 self.error = "No se pudo recargar «\(url.lastPathComponent)»: \(error.localizedDescription)"
             }
         }
     }
 
-    func close() {
-        guard let doc = current else { return }
-        current = nil
+    /// Cierra la pestaña (guardando) y pasa a la de al lado; si era la última, a la biblioteca.
+    func close(_ doc: OpenDoc) {
+        guard let i = tabs.firstIndex(where: { $0 === doc }) else { return }
+        tabs.remove(at: i)
+        if current === doc { current = tabs.isEmpty ? nil : tabs[min(i, tabs.count - 1)] }
         Task { await doc.close() }
     }
 
@@ -126,8 +147,10 @@ final class OpenDoc: Identifiable {
     @ObservationIgnored var reload: (() -> Void)?
     /// Página que se está viendo (la pone el editor), para que al recargar se siga en ella.
     @ObservationIgnored var currentPage: (() -> Int)?
-    /// Página en la que abrir (0 = primera).
-    let startPage: Int
+    /// Página en la que abrir (0 = primera). El editor la pone a 0 cuando ya ha ido a ella.
+    @ObservationIgnored var startPage: Int
+    /// Editor y asistente de la pestaña: siguen vivos al cambiar de pestaña (el cuaderno y el chat no se pierden).
+    @ObservationIgnored var session: (editor: PadEditor, assistant: PadAssistant)?
     /// Observadores de NotificationCenter (con bloque): se quitan al liberar el objeto.
     @ObservationIgnored nonisolated(unsafe) private var observers: [NSObjectProtocol] = []
 
@@ -290,12 +313,17 @@ struct MDobePadApp: App {
             PadRootView(library: library, shelf: shelf)
                 .onOpenURL { library.open($0) } // «Abrir con MDobe» desde Archivos u OneDrive
                 #if DEBUG
-                .task { if let path = ProcessInfo.processInfo.environment["MDOBE_OPEN"] { library.open(URL(fileURLWithPath: path)) } }
+                .task {
+                    // Varias rutas separadas por «:» se abren en pestañas.
+                    for path in ProcessInfo.processInfo.environment["MDOBE_OPEN"]?.split(separator: ":") ?? [] {
+                        library.open(URL(fileURLWithPath: String(path)))
+                        while library.opening { try? await Task.sleep(for: .milliseconds(50)) }
+                    }
+                }
                 #endif
                 .onChange(of: phase) {
-                    guard let doc = library.current else { return }
                     // Al volver a la app se mira si el PDF ha cambiado en otro dispositivo mientras tanto.
-                    if phase == .active { doc.checkForChanges() } else { Task { await doc.save() } }
+                    if phase == .active { library.current?.checkForChanges() } else { for doc in library.tabs { Task { await doc.save() } } }
                 }
         }
     }
@@ -307,19 +335,14 @@ struct PadRootView: View {
     @State private var picking = false
 
     var body: some View {
-        Group {
+        VStack(spacing: 0) {
+            if !library.tabs.isEmpty, library.current?.session?.editor.immersive != true {
+                PadTabBar(library: library, shelf: shelf)
+            }
             if let doc = library.current {
                 NavigationStack {
                     PadDocumentView(doc: doc)
                         .id(doc.id)
-                        .toolbar {
-                            ToolbarItem(placement: .topBarLeading) {
-                                Button("Cerrar", systemImage: "chevron.backward") {
-                                    library.close()
-                                    shelf.changed()
-                                }
-                            }
-                        }
                 }
             } else {
                 LibraryView(model: shelf, open: { library.open($0) }, recents: library.recentURLs, openOther: { picking = true })
@@ -344,5 +367,58 @@ struct PadRootView: View {
         } message: {
             Text(library.error ?? "")
         }
+    }
+}
+
+/// Pestañas de PDFs abiertos, como en Acrobat: la casa lleva a la biblioteca y la ✕ cierra la pestaña.
+private struct PadTabBar: View {
+    let library: PadLibrary
+    let shelf: LibraryModel
+
+    var body: some View {
+        HStack(spacing: 6) {
+            tabButton(selected: library.current == nil) {
+                Image(systemName: "house")
+            } action: {
+                library.showLibrary()
+                shelf.changed()
+            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(library.tabs) { doc in
+                        tabButton(selected: library.current === doc) {
+                            HStack(spacing: 8) {
+                                Image(systemName: "doc.text").foregroundStyle(.secondary)
+                                Text(doc.name).lineLimit(1).frame(maxWidth: 180)
+                                Button {
+                                    library.close(doc)
+                                    shelf.changed()
+                                } label: {
+                                    Image(systemName: "xmark").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                                        .frame(width: 22, height: 22).contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        } action: {
+                            library.select(doc)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 10).padding(.vertical, 6)
+        .background(.bar)
+        .overlay(alignment: .bottom) { Divider() }
+    }
+
+    private func tabButton(selected: Bool, @ViewBuilder label: () -> some View, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            label()
+                .font(.subheadline)
+                .padding(.horizontal, 12).frame(height: 34)
+                .background(selected ? AnyShapeStyle(.background) : AnyShapeStyle(.clear), in: RoundedRectangle(cornerRadius: 8))
+                .overlay { if selected { RoundedRectangle(cornerRadius: 8).strokeBorder(.separator) } }
+        }
+        .buttonStyle(.plain)
     }
 }

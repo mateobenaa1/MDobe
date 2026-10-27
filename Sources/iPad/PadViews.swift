@@ -19,12 +19,17 @@ struct PadDocumentView: View {
 
     init(doc: OpenDoc) {
         self.doc = doc
-        let editor = PadEditor(document: doc.pdf)
-        editor.undoManager = doc.undoManager
-        doc.export = { [weak editor] in editor?.fileData() }
-        doc.currentPage = { [weak editor] in editor?.currentPageIndex ?? 0 }
-        _editor = State(initialValue: editor)
-        _assistant = State(initialValue: PadAssistant(editor: editor))
+        // Al volver a una pestaña se reutiliza su editor; solo la primera vez se crea.
+        let session = doc.session ?? {
+            let editor = PadEditor(document: doc.pdf)
+            editor.undoManager = doc.undoManager
+            doc.export = { [weak editor] in editor?.fileData() }
+            doc.currentPage = { [weak editor] in editor?.currentPageIndex ?? 0 }
+            return (editor, PadAssistant(editor: editor))
+        }()
+        doc.session = session
+        _editor = State(initialValue: session.editor)
+        _assistant = State(initialValue: session.assistant)
     }
 
     var body: some View {
@@ -165,6 +170,7 @@ struct PadDocumentView: View {
             try? await Task.sleep(for: .milliseconds(100))
             editor.pdfView.layoutDocumentView()
             editor.goToPage(doc.startPage + 1)
+            doc.startPage = 0
         }
         .alert("Este PDF ha cambiado en otro dispositivo", isPresented: .constant(doc.conflict)) {
             Button("Guardar los dos") { Task { await doc.keepBoth() } }
