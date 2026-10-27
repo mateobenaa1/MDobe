@@ -16,6 +16,7 @@ struct MDobeApp: App {
 
         DocumentGroup(newDocument: { PDFFile() }) { config in
             DocumentView(file: config.document)
+                .documentTabs()
         }
     }
 }
