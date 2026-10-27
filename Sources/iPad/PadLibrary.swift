@@ -336,15 +336,27 @@ struct PadRootView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if !library.tabs.isEmpty, library.current?.session?.editor.immersive != true {
-                PadTabBar(library: library, shelf: shelf)
-            }
             if let doc = library.current {
                 NavigationStack {
                     PadDocumentView(doc: doc)
                         .id(doc.id)
+                        .safeAreaInset(edge: .top, spacing: 0) {
+                            // Con un solo PDF no hace falta barra: la casa basta para volver.
+                            if library.tabs.count > 1, doc.session?.editor.immersive != true {
+                                PadTabBar(library: library, shelf: shelf)
+                            }
+                        }
+                        .toolbar {
+                            ToolbarItem(placement: .topBarLeading) {
+                                Button("Biblioteca", systemImage: "house") {
+                                    library.showLibrary()
+                                    shelf.changed()
+                                }
+                            }
+                        }
                 }
             } else {
+                if !library.tabs.isEmpty { PadTabBar(library: library, shelf: shelf) }
                 LibraryView(model: shelf, open: { library.open($0) }, recents: library.recentURLs, openOther: { picking = true })
                     .overlay(alignment: .bottom) {
                         if library.opening {
@@ -370,55 +382,62 @@ struct PadRootView: View {
     }
 }
 
-/// Pestañas de PDFs abiertos, como en Acrobat: la casa lleva a la biblioteca y la ✕ cierra la pestaña.
+/// Pestañas de PDFs abiertos, finas como las de Safari. La ✕ sale en la pestaña activa;
+/// manteniendo pulsada cualquiera se puede cerrar ella o las demás.
 private struct PadTabBar: View {
     let library: PadLibrary
     let shelf: LibraryModel
 
     var body: some View {
-        HStack(spacing: 6) {
-            tabButton(selected: library.current == nil) {
-                Image(systemName: "house")
-            } action: {
-                library.showLibrary()
-                shelf.changed()
-            }
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 4) { tabs(minWidth: 120) }
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    ForEach(library.tabs) { doc in
-                        tabButton(selected: library.current === doc) {
-                            HStack(spacing: 8) {
-                                Image(systemName: "doc.text").foregroundStyle(.secondary)
-                                Text(doc.name).lineLimit(1).frame(maxWidth: 180)
-                                Button {
-                                    library.close(doc)
-                                    shelf.changed()
-                                } label: {
-                                    Image(systemName: "xmark").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                                        .frame(width: 22, height: 22).contentShape(Rectangle())
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        } action: {
-                            library.select(doc)
-                        }
+                HStack(spacing: 4) { tabs(minWidth: 150) }
+            }
+        }
+        .padding(.horizontal, 8).padding(.vertical, 4)
+        .background(.bar)
+    }
+
+    private func tabs(minWidth: CGFloat) -> some View {
+        ForEach(library.tabs) { doc in
+            let selected = library.current === doc
+            ZStack(alignment: .leading) {
+                Text(doc.name)
+                    .font(.footnote.weight(selected ? .semibold : .regular))
+                    .foregroundStyle(selected ? .primary : .secondary)
+                    .lineLimit(1).truncationMode(.middle)
+                    .padding(.horizontal, 30)
+                    .frame(maxWidth: .infinity)
+                if selected {
+                    Button("Cerrar", systemImage: "xmark") { close(doc) }
+                        .labelStyle(.iconOnly)
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 30, height: 30)
+                        .contentShape(Rectangle())
+                }
+            }
+            .frame(minWidth: minWidth, maxWidth: .infinity, minHeight: 30)
+            .background(selected ? Color(.systemBackground) : .clear, in: RoundedRectangle(cornerRadius: 8))
+            .shadow(color: .black.opacity(selected ? 0.08 : 0), radius: 2, y: 1)
+            .contentShape(Rectangle())
+            .onTapGesture { library.select(doc) }
+            .contextMenu {
+                Button("Cerrar pestaña", systemImage: "xmark") { close(doc) }
+                if library.tabs.count > 1 {
+                    Button("Cerrar las demás", systemImage: "xmark.square") {
+                        for other in library.tabs where other !== doc { library.close(other) }
+                        library.select(doc)
+                        shelf.changed()
                     }
                 }
             }
         }
-        .padding(.horizontal, 10).padding(.vertical, 6)
-        .background(.bar)
-        .overlay(alignment: .bottom) { Divider() }
     }
 
-    private func tabButton(selected: Bool, @ViewBuilder label: () -> some View, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            label()
-                .font(.subheadline)
-                .padding(.horizontal, 12).frame(height: 34)
-                .background(selected ? AnyShapeStyle(.background) : AnyShapeStyle(.clear), in: RoundedRectangle(cornerRadius: 8))
-                .overlay { if selected { RoundedRectangle(cornerRadius: 8).strokeBorder(.separator) } }
-        }
-        .buttonStyle(.plain)
+    private func close(_ doc: OpenDoc) {
+        library.close(doc)
+        shelf.changed()
     }
 }
