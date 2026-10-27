@@ -67,7 +67,7 @@ struct PadDocumentView: View {
                     ForEach(PadMode.allCases) { Label($0.label, systemImage: $0.symbol).tag($0) }
                 }
                 .pickerStyle(.segmented)
-                .frame(width: 320)
+                .frame(width: 240)
             }
             ToolbarItemGroup(placement: .topBarTrailing) {
                 if editor.hasSelection {

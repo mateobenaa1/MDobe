@@ -81,8 +81,9 @@ final class PadLibrary {
         doc.checkForChanges()
     }
 
-    /// Vuelve a la biblioteca sin cerrar las pestañas.
-    func showLibrary() {
+    /// Sale del PDF que se está viendo (se guarda y se cierra) y vuelve a la biblioteca; las demás pestañas siguen abiertas.
+    func closeToLibrary() {
+        if let doc = current { close(doc) }
         current = nil
     }
 
@@ -333,6 +334,8 @@ struct PadRootView: View {
     @Bindable var library: PadLibrary
     let shelf: LibraryModel
     @State private var picking = false
+    /// La biblioteca en una hoja, para abrir otro PDF en una pestaña nueva sin salir del actual.
+    @State private var pickingAnother = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -347,29 +350,33 @@ struct PadRootView: View {
                             }
                         }
                         .toolbar {
-                            ToolbarItem(placement: .topBarLeading) {
-                                Button("Biblioteca", systemImage: "house") {
-                                    library.showLibrary()
+                            ToolbarItemGroup(placement: .topBarLeading) {
+                                Button("Cerrar y volver a la biblioteca", systemImage: "house") {
+                                    library.closeToLibrary()
                                     shelf.changed()
                                 }
+                                Button("Abrir otro PDF en una pestaña", systemImage: "doc.badge.plus") { pickingAnother = true }
                             }
                         }
                 }
             } else {
                 if !library.tabs.isEmpty { PadTabBar(library: library, shelf: shelf) }
                 LibraryView(model: shelf, open: { library.open($0) }, recents: library.recentURLs, openOther: { picking = true })
-                    .overlay(alignment: .bottom) {
-                        if library.opening {
-                            HStack(spacing: 10) {
-                                ProgressView()
-                                Text("Abriendo… (si está en la nube, se está descargando)")
-                            }
-                            .padding(.horizontal, 16).padding(.vertical, 10)
-                            .background(.regularMaterial, in: Capsule())
-                            .padding()
-                        }
-                    }
             }
+        }
+        .overlay(alignment: .bottom) {
+            if library.opening {
+                HStack(spacing: 10) {
+                    ProgressView()
+                    Text("Abriendo… (si está en la nube, se está descargando)")
+                }
+                .padding(.horizontal, 16).padding(.vertical, 10)
+                .background(.regularMaterial, in: Capsule())
+                .padding()
+            }
+        }
+        .sheet(isPresented: $pickingAnother) {
+            OpenAnotherSheet(library: library, shelf: shelf)
         }
         .fileImporter(isPresented: $picking, allowedContentTypes: [.pdf]) { result in
             if case .success(let url) = result { library.open(url) }
@@ -379,6 +386,27 @@ struct PadRootView: View {
         } message: {
             Text(library.error ?? "")
         }
+    }
+}
+
+/// La biblioteca en una hoja: lo que se elija se abre en una pestaña nueva.
+private struct OpenAnotherSheet: View {
+    let library: PadLibrary
+    let shelf: LibraryModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var picking = false
+
+    var body: some View {
+        LibraryView(model: shelf, open: open, recents: library.recentURLs, openOther: { picking = true })
+            .presentationSizing(.page)
+            .fileImporter(isPresented: $picking, allowedContentTypes: [.pdf]) { result in
+                if case .success(let url) = result { open(url) }
+            }
+    }
+
+    private func open(_ url: URL) {
+        dismiss()
+        library.open(url)
     }
 }
 
