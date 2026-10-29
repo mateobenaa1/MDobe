@@ -61,7 +61,7 @@ final class Editor: ObjectEditing {
     /// Recibe la imagen PNG de una fórmula recuadrada y su número de página (1…).
     @ObservationIgnored var onFormula: ((Data, Int) -> Void)?
     /// Capa que pinta la tinta nítida a la resolución del zoom (PDFKit la deja borrosa).
-    @ObservationIgnored private let ink = InkOverlay(drawsObjects: false)
+    @ObservationIgnored private let ink = InkOverlay(drawsObjects: true)
     /// Cuadro de texto o tabla que se está editando (se muestra como hoja).
     var objectEdit: ObjectEdit?
     var objectNotice: String?
@@ -82,7 +82,8 @@ final class Editor: ObjectEditing {
         // La capa de tinta tiene que estar antes que el documento: si no, PDFKit no la usa.
         ink.pdfView = pdfView
         pdfView.pageOverlayViewProvider = ink
-        SmoothInk.drawnElsewhere = { $0.rotation == 0 && InkOverlay.covers($0) }
+        MovableAnnotation.drawnElsewhere = { $0.rotation == 0 && InkOverlay.covers($0) }
+        SmoothInk.drawnElsewhere = MovableAnnotation.drawnElsewhere
         SmoothInk.adopt(in: document)
         pdfView.document = document
         pdfView.autoScales = true
@@ -118,13 +119,13 @@ final class Editor: ObjectEditing {
     func add(_ a: PDFAnnotation, to page: PDFPage) {
         a.shouldPrint = true
         page.addAnnotation(a)
-        if a is SmoothInk { ink.render(page) }
+        if a is SmoothInk || a is MovableAnnotation { ink.render(page) }
         undoManager?.registerUndo(withTarget: self) { $0.remove(a, from: page) }
     }
 
     func remove(_ a: PDFAnnotation, from page: PDFPage) {
         page.removeAnnotation(a)
-        if a is SmoothInk { ink.render(page) }
+        if a is SmoothInk || a is MovableAnnotation { ink.render(page) }
         undoManager?.registerUndo(withTarget: self) { $0.add(a, to: page) }
     }
 
@@ -174,6 +175,7 @@ final class Editor: ObjectEditing {
     var objectView: PDFView { pdfView }
 
     func refresh(_ page: PDFPage) {
+        ink.render(page)
         pdfView.annotationsChanged(on: page)
     }
 

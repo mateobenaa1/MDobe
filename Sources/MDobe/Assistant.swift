@@ -137,7 +137,7 @@ final class Assistant {
 
     private func askGemini(_ question: String, shown: String) {
         run(user: shown) { [self] in
-            guard let pdf = editor.document.dataRepresentation() else { throw Gemini.Failure.other("No se pudo leer el PDF.") }
+            guard let pdf = MovableAnnotation.data(of: editor.document) else { throw Gemini.Failure.other("No se pudo leer el PDF.") }
             setLast("Gemini está leyendo el PDF…")
             var prompt = "\(location)\n\(editor.annotationSummary)\n\n"
             if !history.isEmpty {

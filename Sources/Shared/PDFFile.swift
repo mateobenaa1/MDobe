@@ -20,7 +20,7 @@ final class PDFFile: ReferenceFileDocument {
     }
 
     func snapshot(contentType: UTType) throws -> Data {
-        guard let data = pdf.dataRepresentation() else { throw CocoaError(.fileWriteUnknown) }
+        guard let data = MovableAnnotation.data(of: pdf) else { throw CocoaError(.fileWriteUnknown) }
         return data
     }
 

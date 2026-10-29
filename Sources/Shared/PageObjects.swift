@@ -23,6 +23,13 @@ class MovableAnnotation: PDFAnnotation {
     /// Mientras se genera el archivo hay que dibujarlas siempre: ese dibujo es lo que se guarda.
     nonisolated(unsafe) static var exporting = false
 
+    /// El PDF tal como se guarda: con los objetos dibujados aunque en pantalla los pinte la capa de tinta.
+    static func data(of document: PDFDocument) -> Data? {
+        exporting = true
+        defer { exporting = false }
+        return document.dataRepresentation()
+    }
+
     var keepsAspect: Bool { false }
     /// Alto que necesita el contenido con ese ancho (nil = alto libre al cambiar el tamaño).
     func fittedHeight(width: CGFloat) -> CGFloat? { nil }

@@ -190,7 +190,7 @@ struct BlockEditor: View {
         guard !aiPrompt.isEmpty, !aiBusy else { return }
         aiBusy = true
         aiError = nil
-        let request = aiPrompt, page = editor.currentPageIndex + 1, pdf = editor.document.dataRepresentation()
+        let request = aiPrompt, page = editor.currentPageIndex + 1, pdf = MovableAnnotation.data(of: editor.document)
         let before = text.isEmpty ? "" : text + "\n\n"
         Task {
             defer { aiBusy = false }
