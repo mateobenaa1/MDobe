@@ -123,7 +123,7 @@ final class TextBox: MovableAnnotation {
 
 final class ImageBox: MovableAnnotation {
     static let dataKey = PDFAnnotationKey(rawValue: "/MDobeImg")
-    private var image: CGImage?
+    private(set) var image: CGImage?
     override var keepsAspect: Bool { true }
 
     /// Coloca la imagen centrada en `center`, a un tamaño razonable para la página.
@@ -141,6 +141,43 @@ final class ImageBox: MovableAnnotation {
         a.setValue(stored.base64EncodedString(), forAnnotationKey: dataKey)
         a.image = image
         return a
+    }
+
+    /// Gira, recorta y cambia el tamaño. Lo recortado se queda donde estaba en la página; el tamaño cambia desde la esquina de arriba a la izquierda.
+    func apply(_ change: ImageChange) -> Bool {
+        guard var img = image else { return false }
+        var b = bounds
+        let turns = (change.turns % 4 + 4) % 4
+        if turns != 0 {
+            guard let r = ImageData.rotated(img, quarterTurns: turns) else { return false }
+            img = r
+            if turns % 2 == 1 { b = CGRect(x: b.midX - b.height / 2, y: b.midY - b.width / 2, width: b.height, height: b.width) }
+        }
+        let full = CGRect(x: 0, y: 0, width: 1, height: 1), crop = change.crop.intersection(full)
+        if crop != full, !crop.isEmpty {
+            let w = CGFloat(img.width), h = CGFloat(img.height)
+            let px = CGRect(x: crop.minX * w, y: crop.minY * h, width: crop.width * w, height: crop.height * h).integral
+            guard let cut = img.cropping(to: px.intersection(CGRect(x: 0, y: 0, width: w, height: h))) else { return false }
+            img = cut
+            b = CGRect(x: b.minX + crop.minX * b.width, y: b.maxY - crop.maxY * b.height, width: crop.width * b.width, height: crop.height * b.height)
+        }
+        if img !== image {
+            guard let data = ImageData.encode(img) else { return false }
+            setValue(data.base64EncodedString(), forAnnotationKey: Self.dataKey)
+            image = img
+        }
+        let w = b.width * change.scale, h = b.height * change.scale
+        bounds = CGRect(x: b.minX, y: b.maxY - h, width: w, height: h)
+        return true
+    }
+
+    override func capture() -> () -> Void {
+        let b = bounds, data = value(forAnnotationKey: Self.dataKey), img = image
+        return { [self] in
+            setValue(data ?? "", forAnnotationKey: Self.dataKey)
+            image = img
+            bounds = b
+        }
     }
 
     func load() {
@@ -354,7 +391,7 @@ final class ObjectDrag {
     let restore: () -> Void
     private let start: CGPoint
     private let original: CGRect
-    private let resizing: Bool
+    let resizing: Bool
     private let scale: CGFloat
     private(set) var moved = false
 
@@ -420,12 +457,39 @@ enum ImageData {
             kCGImageSourceCreateThumbnailWithTransform: true,
             kCGImageSourceThumbnailMaxPixelSize: 1600,
         ]
-        guard let image = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else { return nil }
+        guard let image = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary), let data = encode(image) else { return nil }
+        return (data, image)
+    }
+
+    static func encode(_ image: CGImage) -> Data? {
         let alpha = ![.none, .noneSkipFirst, .noneSkipLast].contains(image.alphaInfo)
         let out = NSMutableData()
         guard let dest = CGImageDestinationCreateWithData(out, (alpha ? UTType.png : UTType.jpeg).identifier as CFString, 1, nil) else { return nil }
         CGImageDestinationAddImage(dest, image, [kCGImageDestinationLossyCompressionQuality: 0.85] as CFDictionary)
         guard CGImageDestinationFinalize(dest) else { return nil }
-        return (out as Data, image)
+        return out as Data
     }
+
+    /// Gira en cuartos de vuelta en el sentido de las agujas del reloj.
+    static func rotated(_ image: CGImage, quarterTurns: Int) -> CGImage? {
+        let turns = (quarterTurns % 4 + 4) % 4
+        guard turns != 0 else { return image }
+        let w = image.width, h = image.height, swap = turns % 2 == 1
+        let alpha = ![.none, .noneSkipFirst, .noneSkipLast].contains(image.alphaInfo)
+        guard let ctx = CGContext(data: nil, width: swap ? h : w, height: swap ? w : h, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                  bitmapInfo: (alpha ? CGImageAlphaInfo.premultipliedLast : .noneSkipLast).rawValue) else { return nil }
+        ctx.interpolationQuality = .high
+        ctx.translateBy(x: CGFloat(ctx.width) / 2, y: CGFloat(ctx.height) / 2)
+        ctx.rotate(by: -CGFloat(turns) * .pi / 2)
+        ctx.draw(image, in: CGRect(x: -CGFloat(w) / 2, y: -CGFloat(h) / 2, width: CGFloat(w), height: CGFloat(h)))
+        return ctx.makeImage()
+    }
+}
+
+/// Lo que se pide en la hoja de editar imagen. El recorte va en fracciones de la imagen ya girada, con el origen arriba a la izquierda.
+struct ImageChange {
+    var turns = 0
+    var crop = CGRect(x: 0, y: 0, width: 1, height: 1)
+    var scale: CGFloat = 1
 }

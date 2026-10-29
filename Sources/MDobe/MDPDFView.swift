@@ -45,7 +45,7 @@ final class MDPDFView: PDFView {
         if tool == .select || tool == .text, let drag = ObjectDrag(at: pagePoint, on: page, scale: scaleFactor) {
             if event.clickCount == 2 { return editor.edit(drag.object, on: page) }
             objectDrag = drag
-            NSCursor.closedHand.push()
+            (drag.resizing ? Self.resizeCursor : NSCursor.closedHand).push()
             return
         }
 
@@ -68,6 +68,20 @@ final class MDPDFView: PDFView {
             inkPoints = [p]
             startPreview()
         }
+    }
+
+    private static let resizeCursor = NSCursor.frameResize(position: .bottomRight, directions: .all)
+
+    /// Sobre un objeto, el cursor avisa de que se puede mover o, en su esquina de abajo a la derecha, cambiar de tamaño.
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        guard tool == .select || tool == .text, objectDrag == nil else { return }
+        let p = convert(event.locationInWindow, from: nil)
+        guard let page = page(for: p, nearest: false) else { return }
+        let point = convert(p, to: page), scale = max(scaleFactor, 0.1)
+        guard let object = PageObjects.object(at: point, on: page, tolerance: 4 / scale) else { return }
+        let corner = hypot(point.x - object.bounds.maxX, point.y - object.bounds.minY) <= 16 / scale
+        (corner ? Self.resizeCursor : .openHand).set()
     }
 
     override func keyDown(with event: NSEvent) {
@@ -139,8 +153,9 @@ final class MDPDFView: PDFView {
         let point = convert(p, to: page)
         var items: [NSMenuItem] = []
         let object = PageObjects.object(at: point, on: page, tolerance: 4 / max(scaleFactor, 0.1))
-        if let object, object is TextBox || object is TableBox {
-            items.append(ActionItem(object is TextBox ? "Editar texto…" : "Editar tabla…") { editor.edit(object, on: page) })
+        if let object {
+            let title = object is TextBox ? "Editar texto…" : object is TableBox ? "Editar tabla…" : "Editar imagen (recortar, girar, tamaño)…"
+            items.append(ActionItem(title) { editor.edit(object, on: page) })
         }
         if object == nil || object is TableBox {
             items.append(ActionItem("Añadir fila a esta tabla") { editor.growTable(.row, at: point, on: page) })

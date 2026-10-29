@@ -3,9 +3,9 @@ import SwiftUI
 
 enum TableGrow { case row, column }
 
-/// Petición de editar (o crear) un cuadro de texto o una tabla: la vista la muestra como hoja.
+/// Petición de editar (o crear) un cuadro de texto, una tabla o una imagen: la vista la muestra como hoja.
 struct ObjectEdit: Identifiable {
-    enum Kind { case text, table }
+    enum Kind { case text, table, image }
     let id = UUID()
     let kind: Kind
     let page: PDFPage
@@ -46,17 +46,34 @@ extension ObjectEditing {
 
     /// Toque o clic con la herramienta de texto: edita lo que haya debajo o empieza un cuadro nuevo.
     func beginText(at point: CGPoint, on page: PDFPage) {
-        let hit = PageObjects.object(at: point, on: page, tolerance: 4 / max(objectView.scaleFactor, 0.1))
-        if let hit, hit is TextBox || hit is TableBox {
-            objectEdit = ObjectEdit(kind: hit is TextBox ? .text : .table, page: page, point: point, object: hit)
+        if let hit = PageObjects.object(at: point, on: page, tolerance: 4 / max(objectView.scaleFactor, 0.1)) {
+            edit(hit, on: page)
         } else {
             objectEdit = ObjectEdit(kind: .text, page: page, point: point)
         }
     }
 
     func edit(_ object: MovableAnnotation, on page: PDFPage) {
-        guard object is TextBox || object is TableBox else { return }
-        objectEdit = ObjectEdit(kind: object is TextBox ? .text : .table, page: page, point: .zero, object: object)
+        let kind: ObjectEdit.Kind = object is TextBox ? .text : object is TableBox ? .table : .image
+        objectEdit = ObjectEdit(kind: kind, page: page, point: .zero, object: object)
+    }
+
+    /// nil = borrar la imagen.
+    func commitImage(_ edit: ObjectEdit, _ change: ImageChange?) {
+        guard let box = edit.object as? ImageBox else { return }
+        guard let change else {
+            remove(box, from: edit.page)
+            undoManager?.setActionName("Borrar imagen")
+            return
+        }
+        let restore = box.capture()
+        guard box.apply(change) else {
+            objectNotice = "No he podido editar la imagen."
+            return
+        }
+        refresh(edit.page)
+        registerChange(box, on: edit.page, restore: restore)
+        undoManager?.setActionName("Editar imagen")
     }
 
     /// Texto vacío = borrar el cuadro.
@@ -186,6 +203,10 @@ struct ObjectEditSheet: View {
             TableSheet(model: (edit.object as? TableBox)?.model ?? .blank, isNew: edit.object == nil) {
                 editor.commitTable(edit, $0)
             }
+        case .image:
+            if let image = (edit.object as? ImageBox)?.image {
+                ImageSheet(image: image) { editor.commitImage(edit, $0) }
+            }
         }
     }
 }
@@ -304,5 +325,124 @@ struct TableSheet: View {
     private func cell(_ r: Int, _ c: Int) -> Binding<String> {
         Binding(get: { r < model.cells.count && c < model.cells[r].count ? model.cells[r][c] : "" },
                 set: { if r < model.cells.count, c < model.cells[r].count { model.cells[r][c] = $0 } })
+    }
+}
+
+/// Recortar, girar y cambiar el tamaño de una imagen.
+struct ImageSheet: View {
+    @State private var shown: CGImage
+    @State private var change = ImageChange()
+    let done: (ImageChange?) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    init(image: CGImage, done: @escaping (ImageChange?) -> Void) {
+        _shown = State(initialValue: image)
+        self.done = done
+    }
+
+    private var full: CGRect { CGRect(x: 0, y: 0, width: 1, height: 1) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Editar imagen").font(.headline)
+            CropView(image: shown, crop: $change.crop)
+                .frame(maxWidth: .infinity, minHeight: 200, maxHeight: 420)
+            HStack {
+                Button("Girar", systemImage: "rotate.right") {
+                    guard let r = ImageData.rotated(shown, quarterTurns: 1) else { return }
+                    shown = r
+                    change.turns += 1
+                    change.crop = full
+                }
+                Button("Quitar recorte") { change.crop = full }
+                    .disabled(change.crop == full)
+                Spacer()
+            }
+            HStack {
+                Text("Tamaño")
+                Slider(value: $change.scale, in: 0.25...3)
+                Text("\(Int((change.scale * 100).rounded())) %").monospacedDigit().frame(width: 52, alignment: .trailing)
+                Button("100 %") { change.scale = 1 }.disabled(change.scale == 1)
+            }
+            HStack {
+                Button("Eliminar", role: .destructive) { done(nil); dismiss() }
+                Spacer()
+                Button("Cancelar") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Guardar") { done(change); dismiss() }
+                    .keyboardShortcut(.return, modifiers: .command)
+                    .buttonStyle(.borderedProminent)
+            }
+            Text("Arrastra las esquinas para recortar. También puedes cambiar el tamaño en la página arrastrando la esquina de abajo a la derecha de la imagen.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .padding(18)
+        .frame(minWidth: 480)
+    }
+}
+
+/// La imagen con un marco de recorte: se arrastra por las esquinas o entero.
+private struct CropView: View {
+    let image: CGImage
+    @Binding var crop: CGRect
+    @State private var start: CGRect?
+
+    private enum Handle { case move, corner(left: Bool, top: Bool) }
+    private static let corners = [(true, true), (false, true), (true, false), (false, false)]
+
+    var body: some View {
+        Image(decorative: image, scale: 1)
+            .resizable()
+            .aspectRatio(CGFloat(image.width) / CGFloat(image.height), contentMode: .fit)
+            .overlay {
+                GeometryReader { geo in
+                    let size = geo.size
+                    let r = CGRect(x: crop.minX * size.width, y: crop.minY * size.height,
+                                   width: crop.width * size.width, height: crop.height * size.height)
+                    ZStack(alignment: .topLeading) {
+                        Path { p in
+                            p.addRect(CGRect(origin: .zero, size: size))
+                            p.addRect(r)
+                        }
+                        .fill(.black.opacity(0.5), style: FillStyle(eoFill: true))
+                        .allowsHitTesting(false)
+                        Rectangle()
+                            .stroke(.white, lineWidth: 1.5)
+                            .contentShape(Rectangle())
+                            .frame(width: r.width, height: r.height)
+                            .offset(x: r.minX, y: r.minY)
+                            .gesture(drag(.move, size))
+                        ForEach(0..<4, id: \.self) { i in
+                            let (left, top) = Self.corners[i]
+                            Circle()
+                                .fill(.white)
+                                .overlay(Circle().stroke(.black.opacity(0.4)))
+                                .frame(width: 16, height: 16)
+                                .contentShape(Rectangle().inset(by: -10))
+                                .position(x: left ? r.minX : r.maxX, y: top ? r.minY : r.maxY)
+                                .gesture(drag(.corner(left: left, top: top), size))
+                        }
+                    }
+                }
+            }
+    }
+
+    private func drag(_ handle: Handle, _ size: CGSize) -> some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { g in
+                let s = start ?? crop
+                start = s
+                let dx = g.translation.width / max(size.width, 1), dy = g.translation.height / max(size.height, 1)
+                switch handle {
+                case .move:
+                    crop.origin = CGPoint(x: min(max(0, s.minX + dx), 1 - s.width), y: min(max(0, s.minY + dy), 1 - s.height))
+                case .corner(let left, let top):
+                    let m: CGFloat = 0.05
+                    var minX = s.minX, maxX = s.maxX, minY = s.minY, maxY = s.maxY
+                    if left { minX = min(max(0, s.minX + dx), maxX - m) } else { maxX = max(min(1, s.maxX + dx), minX + m) }
+                    if top { minY = min(max(0, s.minY + dy), maxY - m) } else { maxY = max(min(1, s.maxY + dy), minY + m) }
+                    crop = CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+                }
+            }
+            .onEnded { _ in start = nil }
     }
 }
