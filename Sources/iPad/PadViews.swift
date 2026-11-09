@@ -12,6 +12,8 @@ struct PadDocumentView: View {
     @State private var pickingPhoto = false
     @State private var photo: PhotosPickerItem?
     @State private var pickingImageFile = false
+    /// La imagen elegida va a la hoja del cuaderno en vez de al PDF.
+    @State private var imageIntoNotes = false
     @State private var pickingNewVersion = false
     @State private var updateReport: String?
 
@@ -39,7 +41,9 @@ struct PadDocumentView: View {
                 PDFRepresentable(view: editor.pdfView)
                 if editor.showNotes {
                     Divider()
-                    NotesPanel(editor: editor)
+                    NotesPanel(editor: editor,
+                               pickPhoto: { imageIntoNotes = true; pickingPhoto = true },
+                               pickFile: { imageIntoNotes = true; pickingImageFile = true })
                 }
             }
             .ignoresSafeArea(edges: editor.immersive ? .all : [])
@@ -51,14 +55,14 @@ struct PadDocumentView: View {
             guard case .success(let url) = result else { return }
             let scoped = url.startAccessingSecurityScopedResource()
             defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-            if let data = try? Data(contentsOf: url) { editor.insertImage(data) } else { editor.objectNotice = "No se pudo abrir «\(url.lastPathComponent)»." }
+            if let data = try? Data(contentsOf: url) { place(data) } else { editor.objectNotice = "No se pudo abrir «\(url.lastPathComponent)»." }
         }
         .photosPicker(isPresented: $pickingPhoto, selection: $photo, matching: .images)
         .onChange(of: photo) {
             guard let item = photo else { return }
             photo = nil
             Task {
-                if let data = try? await item.loadTransferable(type: Data.self) { editor.insertImage(data) } else { editor.objectNotice = "No he podido leer esa foto." }
+                if let data = try? await item.loadTransferable(type: Data.self) { place(data) } else { editor.objectNotice = "No he podido leer esa foto." }
             }
         }
         .toolbar {
@@ -75,8 +79,8 @@ struct PadDocumentView: View {
                 }
                 Menu("Insertar", systemImage: "plus.square.on.square") {
                     Button("Cuadro de texto", systemImage: "textformat") { editor.mode = .text }
-                    Button("Imagen de Fotos", systemImage: "photo") { pickingPhoto = true }
-                    Button("Imagen de Archivos", systemImage: "folder") { pickingImageFile = true }
+                    Button("Imagen de Fotos", systemImage: "photo") { imageIntoNotes = false; pickingPhoto = true }
+                    Button("Imagen de Archivos", systemImage: "folder") { imageIntoNotes = false; pickingImageFile = true }
                     Divider()
                     Button("Tabla", systemImage: "tablecells") { editor.insertTable() }
                     Button("Añadir fila a una tabla del PDF", systemImage: "rectangle.split.1x2") {
@@ -183,6 +187,10 @@ struct PadDocumentView: View {
 }
 
 extension PadDocumentView {
+    private func place(_ image: Data) {
+        if imageIntoNotes { editor.insertImageInNotes(image) } else { editor.insertImage(image) }
+    }
+
     private func updateToNewVersion(_ url: URL) async {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
@@ -199,6 +207,8 @@ extension PadDocumentView {
 /// Hojas de apuntes de la página que estás viendo, al lado del PDF. Se pasan deslizando como un libro.
 private struct NotesPanel: View {
     let editor: PadEditor
+    let pickPhoto: () -> Void
+    let pickFile: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -211,6 +221,7 @@ private struct NotesPanel: View {
                 Button("Hoja siguiente", systemImage: "chevron.right") { editor.flipNotes(by: 1) }
                     .disabled(editor.notesSheet + 1 >= editor.notesCount)
                 Spacer()
+                insertMenu
                 paperMenu
                 if editor.notesCount > 0 {
                     Button("Eliminar hoja", systemImage: "trash", role: .destructive) { editor.deleteNotesSheet() }
@@ -236,6 +247,15 @@ private struct NotesPanel: View {
                     .background(Color(.secondarySystemBackground))
                 }
             }
+        }
+    }
+
+    /// Fotos y tablas en la hoja que se ve (si la página aún no tiene hojas, se crea una lisa).
+    private var insertMenu: some View {
+        Menu("Insertar en la hoja", systemImage: "photo.badge.plus") {
+            Button("Imagen de Fotos", systemImage: "photo") { pickPhoto() }
+            Button("Imagen de Archivos", systemImage: "folder") { pickFile() }
+            Button("Tabla", systemImage: "tablecells") { editor.insertTableInNotes() }
         }
     }
 

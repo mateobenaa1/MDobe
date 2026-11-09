@@ -21,8 +21,14 @@ struct DocumentView: View {
             ThumbnailsView(pdfView: editor.pdfView)
                 .navigationSplitViewColumnWidth(min: 120, ideal: 160, max: 260)
         } detail: {
-            PDFKitView(pdfView: editor.pdfView)
-                .overlay(alignment: .bottom) { statusOverlay }
+            HSplitView {
+                PDFKitView(pdfView: editor.pdfView)
+                    .frame(minWidth: 300)
+                    .overlay(alignment: .bottom) { statusOverlay }
+                if editor.showNotes {
+                    NotesPanel(editor: editor)
+                }
+            }
         }
         .inspector(isPresented: $showAI) {
             AIPanel(assistant: assistant)
@@ -54,7 +60,10 @@ struct DocumentView: View {
         } message: {
             Text(editor.updateReport ?? "")
         }
-        .onAppear { editor.undoManager = undoManager }
+        .onAppear {
+            editor.undoManager = undoManager
+            file.export = { [weak editor] in editor?.fileData() } // con las hojas del cuaderno detrás de su página
+        }
         .onChange(of: undoManager) { editor.undoManager = undoManager }
     }
 
@@ -182,6 +191,11 @@ struct DocumentView: View {
             }
         }
         ToolbarItemGroup {
+            Button(editor.showNotes ? "Ocultar cuaderno" : "Cuaderno de apuntes", systemImage: editor.showNotes ? "book.fill" : "book") {
+                editor.showNotes.toggle()
+            }
+            .keyboardShortcut("n", modifiers: [.command, .option])
+            .help("Hojas de apuntes al lado del PDF (⌥⌘N)")
             Button("Imprimir", systemImage: "printer") { editor.print() }.keyboardShortcut("p")
             Button("Asistente IA", systemImage: "sparkles") { showAI.toggle() }.keyboardShortcut("i", modifiers: [.command, .option])
         }

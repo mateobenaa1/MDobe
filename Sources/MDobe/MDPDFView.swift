@@ -34,7 +34,7 @@ final class MDPDFView: PDFView {
         let p = convert(event.locationInWindow, from: nil)
         guard let editor, let page = page(for: p, nearest: false) else { return super.mouseDown(with: event) }
         let pagePoint = convert(p, to: page)
-        if let block = editor.pendingBlock {
+        if let block = editor.pendingBlock, self === editor.pdfView { // los bloques van en el PDF, no en el cuaderno
             return editor.placeBlock(block.text, plain: block.plain, at: pagePoint, on: page)
         }
         if let grow = editor.pendingGrow {

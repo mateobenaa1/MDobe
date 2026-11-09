@@ -64,7 +64,7 @@ final class PadEditor: ObjectEditing {
     let notesView = PDFView()
     @ObservationIgnored private let notesPencil = PencilLayer()
     @ObservationIgnored private let notesInk = InkOverlay(drawsObjects: true)
-    @ObservationIgnored private var notes: [PDFPage: PDFDocument] = [:]
+    @ObservationIgnored private let notes: Notebook
     var showNotes = UserDefaults.standard.bool(forKey: "pad.showNotes") {
         didSet {
             UserDefaults.standard.set(showNotes, forKey: "pad.showNotes")
@@ -77,6 +77,7 @@ final class PadEditor: ObjectEditing {
 
     init(document: PDFDocument) {
         self.document = document
+        notes = Notebook(document: document)
         pencil.editor = self
         // Las capas de tinta tienen que configurarse ANTES de cargar el documento.
         ink.pdfView = pdfView
@@ -84,7 +85,6 @@ final class PadEditor: ObjectEditing {
         pdfView.autoScales = true
         pdfView.displayMode = .singlePageContinuous
         pdfView.displayDirection = .vertical
-        extractNotes()
         pdfView.document = document
         SmoothInk.adopt(in: document)
         PageObjects.adopt(in: document)
@@ -96,7 +96,7 @@ final class PadEditor: ObjectEditing {
         notesView.autoScales = true
         notesView.displayMode = .singlePage
         notesView.displayDirection = .horizontal
-        notes.values.forEach {
+        notes.allBooks.forEach {
             SmoothInk.adopt(in: $0)
             PageObjects.adopt(in: $0)
         }
@@ -539,6 +539,7 @@ final class PadEditor: ObjectEditing {
             }
             document.removePage(at: i)
             document.insert(to, at: i)
+            notes.move(from: from, to: to)
         }
         if let target = pairs.first(where: { $0.from === current })?.to { pdfView.go(to: target) }
         undoManager?.registerUndo(withTarget: self) { $0.exchange(pairs.map { ($0.to, $0.from) }) }
@@ -546,10 +547,11 @@ final class PadEditor: ObjectEditing {
 
     /// Cambia el PDF por su nueva versión recolocando tus anotaciones y páginas. Devuelve el resumen para el usuario.
     func updateToNewVersion(_ fresh: PDFDocument) -> String {
-        flattenNotes() // las hojas del cuaderno viajan con su página como cualquier página tuya
+        notes.flatten() // las hojas del cuaderno viajan con su página como cualquier página tuya
+        notesView.document = nil
         let plan = PDFUpdate.plan(old: document, new: fresh)
         guard plan.matched > 0 else {
-            extractNotes()
+            notes.extract()
             refreshNotes()
             return "No encuentro páginas en común: ¿es una versión de este mismo PDF?"
         }
@@ -560,9 +562,10 @@ final class PadEditor: ObjectEditing {
 
     private func replacePages(_ pages: [PDFPage], _ moves: [PDFUpdate.Move]) {
         let index = currentPageIndex
-        flattenNotes()
+        notes.flatten()
+        notesView.document = nil
         let undo = PDFUpdate.apply(pages, moves, to: document)
-        extractNotes()
+        notes.extract()
         ink.forgetCache() // la tinta puede haber cambiado de página
         pdfView.layoutDocumentView()
         if let page = document.page(at: min(index, document.pageCount - 1)) { pdfView.go(to: page) }
@@ -572,59 +575,12 @@ final class PadEditor: ObjectEditing {
 
     // MARK: Cuaderno
 
-    /// Saca del documento las hojas del cuaderno (van detrás de su página) y las agrupa por página.
-    private func extractNotes() {
-        var parent: PDFPage?
-        var i = 0
-        while i < document.pageCount {
-            guard let page = document.page(at: i) else { i += 1; continue }
-            if let parent, page.isNotesSheet {
-                document.removePage(at: i)
-                let book = notes[parent] ?? PDFDocument()
-                book.insert(page, at: book.pageCount)
-                notes[parent] = book
-            } else {
-                parent = page
-                i += 1
-            }
-        }
-    }
-
-    /// Vuelve a meter las hojas en el documento, detrás de su página.
-    private func flattenNotes() {
-        for (parent, book) in notes {
-            let i = document.index(for: parent)
-            guard i >= 0, i < document.pageCount else { continue }
-            let sheets = (0..<book.pageCount).compactMap { book.page(at: $0) }
-            while book.pageCount > 0 { book.removePage(at: 0) }
-            for (k, sheet) in sheets.enumerated() { document.insert(sheet, at: i + 1 + k) }
-        }
-        notes = [:]
-        notesView.document = nil
-    }
-
     /// El PDF tal como se guarda: con las hojas del cuaderno detrás de su página (sin tocar lo que se ve).
-    func fileData() -> Data? {
-        MovableAnnotation.exporting = true
-        defer { MovableAnnotation.exporting = false }
-        guard let data = document.dataRepresentation() else { return nil }
-        let books = notes.compactMap { parent, book -> (index: Int, book: PDFDocument)? in
-            let i = document.index(for: parent)
-            return i >= 0 && i < document.pageCount && book.pageCount > 0 ? (i, book) : nil
-        }
-        guard !books.isEmpty, let out = PDFDocument(data: data) else { return data }
-        for (i, book) in books.sorted(by: { $0.index > $1.index }) {
-            guard let copy = book.dataRepresentation().flatMap({ PDFDocument(data: $0) }) else { continue }
-            let sheets = (0..<copy.pageCount).compactMap { copy.page(at: $0) }
-            while copy.pageCount > 0 { copy.removePage(at: 0) }
-            for (k, sheet) in sheets.enumerated() { out.insert(sheet, at: i + 1 + k) }
-        }
-        return out.dataRepresentation()
-    }
+    func fileData() -> Data? { notes.fileData() }
 
     /// Muestra las hojas de la página actual del PDF.
     private func refreshNotes() {
-        let book = pdfView.currentPage.flatMap { notes[$0] }
+        let book = notes.book(for: pdfView.currentPage)
         if notesView.document !== book { notesView.document = book }
         notesCount = book?.pageCount ?? 0
         notesPage = currentPageIndex
@@ -640,13 +596,32 @@ final class PadEditor: ObjectEditing {
     }
 
     func addNotesSheet(_ paper: PageFactory.Paper) {
-        guard let parent = pdfView.currentPage else { return }
-        var size = parent.bounds(for: .cropBox).size
-        if parent.rotation % 180 != 0 { size = CGSize(width: size.height, height: size.width) }
-        guard let sheet = PageFactory.blank(paper, box: CGRect(origin: .zero, size: size)) else { return }
-        sheet.markAsNotesSheet()
-        attach(sheet, to: parent, at: (notes[parent]?.pageCount ?? 0))
+        guard let parent = pdfView.currentPage, let sheet = Notebook.blankSheet(paper, for: parent) else { return }
+        attach(sheet, to: parent, at: notes.count(for: parent))
         undoManager?.setActionName("Añadir hoja")
+    }
+
+    /// Hoja del cuaderno donde poner una imagen o tabla: la que se ve (o una lisa nueva si la página aún no tiene apuntes).
+    private func notesTarget() -> (page: PDFPage, center: CGPoint)? {
+        if notesView.currentPage == nil { addNotesSheet(.plain) }
+        guard let sheet = notesView.currentPage else { return nil }
+        if let (page, point) = PageObjects.visibleCenter(in: notesView), page === sheet { return (page, point) }
+        let crop = sheet.bounds(for: .cropBox)
+        return (sheet, CGPoint(x: crop.midX, y: crop.midY))
+    }
+
+    func insertImageInNotes(_ data: Data) {
+        grouped("Insertar imagen") {
+            guard let (page, center) = notesTarget() else { return }
+            insertImage(data, on: page, at: center)
+        }
+    }
+
+    func insertTableInNotes() {
+        grouped("Insertar tabla") {
+            guard let (page, center) = notesTarget() else { return }
+            insertTable(on: page, at: center)
+        }
     }
 
     func deleteNotesSheet() {
@@ -656,9 +631,7 @@ final class PadEditor: ObjectEditing {
     }
 
     private func attach(_ sheet: PDFPage, to parent: PDFPage, at index: Int) {
-        let book = notes[parent] ?? PDFDocument()
-        notes[parent] = book
-        book.insert(sheet, at: min(index, book.pageCount))
+        notes.insert(sheet, for: parent, at: index)
         refreshNotes()
         if pdfView.currentPage === parent {
             UIView.transition(with: notesView, duration: 0.45, options: .transitionCurlUp) { self.notesView.go(to: sheet) }
@@ -668,11 +641,7 @@ final class PadEditor: ObjectEditing {
     }
 
     private func detach(_ sheet: PDFPage, from parent: PDFPage) {
-        guard let book = notes[parent] else { return }
-        let i = book.index(for: sheet)
-        guard i >= 0, i < book.pageCount else { return }
-        book.removePage(at: i)
-        if book.pageCount == 0 { notes[parent] = nil }
+        guard let i = notes.remove(sheet, from: parent) else { return }
         refreshNotes()
         undoManager?.registerUndo(withTarget: self) { $0.attach(sheet, to: parent, at: i) }
     }

@@ -47,7 +47,12 @@ enum Tool: String, CaseIterable, Identifiable {
 final class Editor: ObjectEditing {
     let document: PDFDocument
     let pdfView = MDPDFView()
-    var tool: Tool = .select { didSet { pdfView.tool = tool } }
+    var tool: Tool = .select {
+        didSet {
+            pdfView.tool = tool
+            notesView.tool = tool
+        }
+    }
     var color: Color = .yellow
     var undoManager: UndoManager?
     var showSignaturePad = false
@@ -74,11 +79,23 @@ final class Editor: ObjectEditing {
     private(set) var results: [PDFSelection] = []
     private(set) var resultIndex = 0
     private var lastQuery = ""
+    /// Cuaderno: hojas de apuntes de cada página, al lado del PDF (como en el iPad).
+    let notesView = MDPDFView()
+    @ObservationIgnored private let notesInk = InkOverlay(drawsObjects: true)
+    @ObservationIgnored let notes: Notebook
+    var showNotes = UserDefaults.standard.bool(forKey: "mac.showNotes") {
+        didSet { UserDefaults.standard.set(showNotes, forKey: "mac.showNotes") }
+    }
+    var notesSheet = 0
+    var notesCount = 0
+    var notesPage = 0
+
     /// Observadores de NotificationCenter (con bloque): se quitan al liberar el objeto.
     @ObservationIgnored nonisolated(unsafe) private var observers: [NSObjectProtocol] = []
 
     init(document: PDFDocument) {
         self.document = document
+        notes = Notebook(document: document) // las hojas del cuaderno salen del PDF antes de mostrarlo
         // La capa de tinta tiene que estar antes que el documento: si no, PDFKit no la usa.
         ink.pdfView = pdfView
         pdfView.pageOverlayViewProvider = ink
@@ -91,6 +108,16 @@ final class Editor: ObjectEditing {
         pdfView.backgroundColor = .underPageBackgroundColor
         pdfView.editor = self
         PageObjects.adopt(in: document)
+        notesInk.pdfView = notesView
+        notesView.pageOverlayViewProvider = notesInk
+        notesView.autoScales = true
+        notesView.displayMode = .singlePage
+        notesView.backgroundColor = .underPageBackgroundColor
+        notesView.editor = self
+        notes.allBooks.forEach {
+            SmoothInk.adopt(in: $0)
+            PageObjects.adopt(in: $0)
+        }
         suggestOCR = document.pageCount > 0 && (0..<min(3, document.pageCount)).allSatisfy(isScanned)
         observers.append(NotificationCenter.default.addObserver(forName: .PDFViewAnnotationHit, object: pdfView, queue: .main) { [weak self] n in
             MainActor.assumeIsolated { self?.widgetHit(n) }
@@ -98,6 +125,15 @@ final class Editor: ObjectEditing {
         observers.append(NotificationCenter.default.addObserver(forName: .PDFViewScaleChanged, object: pdfView, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.ink.zoomChanged() }
         })
+        observers.append(NotificationCenter.default.addObserver(forName: .PDFViewScaleChanged, object: notesView, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.notesInk.zoomChanged() }
+        })
+        for view in [pdfView, notesView] {
+            observers.append(NotificationCenter.default.addObserver(forName: .PDFViewPageChanged, object: view, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.refreshNotes() }
+            })
+        }
+        refreshNotes()
     }
 
     deinit {
@@ -119,13 +155,13 @@ final class Editor: ObjectEditing {
     func add(_ a: PDFAnnotation, to page: PDFPage) {
         a.shouldPrint = true
         page.addAnnotation(a)
-        if a is SmoothInk || a is MovableAnnotation { ink.render(page) }
+        if a is SmoothInk || a is MovableAnnotation { renderInk(page) }
         undoManager?.registerUndo(withTarget: self) { $0.remove(a, from: page) }
     }
 
     func remove(_ a: PDFAnnotation, from page: PDFPage) {
         page.removeAnnotation(a)
-        if a is SmoothInk || a is MovableAnnotation { ink.render(page) }
+        if a is SmoothInk || a is MovableAnnotation { renderInk(page) }
         undoManager?.registerUndo(withTarget: self) { $0.add(a, to: page) }
     }
 
@@ -175,23 +211,30 @@ final class Editor: ObjectEditing {
     var objectView: PDFView { pdfView }
 
     func refresh(_ page: PDFPage) {
-        ink.render(page)
-        pdfView.annotationsChanged(on: page)
+        renderInk(page)
+        for view in [pdfView, notesView] where view.document === page.document { view.annotationsChanged(on: page) }
     }
 
-    func insertImageFromFile() {
+    private func renderInk(_ page: PDFPage) {
+        ink.render(page)
+        notesInk.render(page)
+    }
+
+    /// `intoNotes`: en la hoja del cuaderno que se ve, en vez de en el PDF.
+    func insertImageFromFile(intoNotes: Bool = false) {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.image]
-        panel.message = "Elige la imagen que quieres poner en esta página"
+        panel.message = intoNotes ? "Elige la imagen que quieres poner en la hoja de apuntes" : "Elige la imagen que quieres poner en esta página"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         guard let data = try? Data(contentsOf: url) else { objectNotice = "No se pudo abrir «\(url.lastPathComponent)»."; return }
-        insertImage(data)
+        intoNotes ? insertImageInNotes(data) : insertImage(data)
     }
 
-    func pasteImage() {
+    func pasteImage(intoNotes: Bool = false) {
         let pb = NSPasteboard.general
-        if let data = pb.data(forType: .png) ?? pb.data(forType: .tiff) { return insertImage(data) }
-        if let url = pb.readObjects(forClasses: [NSURL.self])?.first as? URL, let data = try? Data(contentsOf: url) { return insertImage(data) }
+        let place = { (data: Data) in intoNotes ? self.insertImageInNotes(data) : self.insertImage(data) }
+        if let data = pb.data(forType: .png) ?? pb.data(forType: .tiff) { return place(data) }
+        if let url = pb.readObjects(forClasses: [NSURL.self])?.first as? URL, let data = try? Data(contentsOf: url) { return place(data) }
         objectNotice = "No hay ninguna imagen copiada. Copia una imagen (o haz una captura con ⌘⇧⌃4) y vuelve a probar."
     }
 
@@ -275,7 +318,8 @@ final class Editor: ObjectEditing {
             return true
         }
         guard let tiff = img.tiffRepresentation, let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) else { return }
-        onFormula?(png, document.index(for: page) + 1)
+        let index = page.document === document ? document.index(for: page) : currentPageIndex // en una hoja: su página
+        onFormula?(png, index + 1)
     }
 
     // MARK: Formularios
@@ -326,6 +370,7 @@ final class Editor: ObjectEditing {
             }
             document.removePage(at: i)
             document.insert(to, at: i)
+            notes.move(from: from, to: to)
         }
         ink.forgetCache()
         ink.renderAll()
@@ -430,8 +475,11 @@ final class Editor: ObjectEditing {
         panel.message = "Elige la nueva versión de este PDF: tus apuntes se pasarán a ella"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         guard let fresh = PDFDocument(url: url) else { updateReport = "No se pudo abrir «\(url.lastPathComponent)»."; return }
+        flattenNotes() // las hojas del cuaderno viajan con su página como cualquier página tuya
         let plan = PDFUpdate.plan(old: document, new: fresh)
         guard plan.matched > 0 else {
+            notes.extract()
+            refreshNotes()
             updateReport = "No encuentro páginas en común: ¿es una versión de este mismo PDF? (Si está escaneado, pásale antes el OCR.)"
             return
         }
@@ -442,11 +490,14 @@ final class Editor: ObjectEditing {
 
     private func replacePages(_ pages: [PDFPage], _ moves: [PDFUpdate.Move]) {
         let index = currentPageIndex
+        flattenNotes()
         let undo = PDFUpdate.apply(pages, moves, to: document)
+        notes.extract()
         pdfView.layoutDocumentView()
         ink.forgetCache()
         ink.renderAll()
         if let page = document.page(at: min(index, document.pageCount - 1)) { pdfView.go(to: page) }
+        refreshNotes()
         undoManager?.registerUndo(withTarget: self) { $0.replacePages(undo.pages, undo.moves) }
     }
 

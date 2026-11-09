@@ -6,6 +6,8 @@ import UniformTypeIdentifiers
 final class PDFFile: ReferenceFileDocument {
     static var readableContentTypes: [UTType] { [.pdf] }
     let pdf: PDFDocument
+    /// Lo que se guarda, si el editor lo prepara él (p. ej. con las hojas del cuaderno, que no están en `pdf`).
+    @MainActor var export: (() -> Data?)?
 
     init() {
         pdf = PDFDocument()
@@ -20,8 +22,13 @@ final class PDFFile: ReferenceFileDocument {
     }
 
     func snapshot(contentType: UTType) throws -> Data {
-        guard let data = MovableAnnotation.data(of: pdf) else { throw CocoaError(.fileWriteUnknown) }
+        let data = Thread.isMainThread ? MainActor.assumeIsolated { exportData() } : DispatchQueue.main.sync { exportData() }
+        guard let data else { throw CocoaError(.fileWriteUnknown) }
         return data
+    }
+
+    @MainActor private func exportData() -> Data? {
+        export?() ?? MovableAnnotation.data(of: pdf)
     }
 
     func fileWrapper(snapshot: Data, configuration: WriteConfiguration) throws -> FileWrapper {

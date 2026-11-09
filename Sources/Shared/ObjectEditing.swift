@@ -119,6 +119,10 @@ extension ObjectEditing {
 
     func insertImage(_ data: Data) {
         guard let (page, center) = PageObjects.visibleCenter(in: objectView) else { return }
+        insertImage(data, on: page, at: center)
+    }
+
+    func insertImage(_ data: Data, on page: PDFPage, at center: CGPoint) {
         guard let box = ImageBox.make(data, center: center, on: page) else {
             objectNotice = "No he podido leer esa imagen."
             return
@@ -129,6 +133,10 @@ extension ObjectEditing {
 
     func insertTable() {
         guard let (page, center) = PageObjects.visibleCenter(in: objectView) else { return }
+        insertTable(on: page, at: center)
+    }
+
+    func insertTable(on page: PDFPage, at center: CGPoint) {
         let size = TableModel.blank.size, crop = page.bounds(for: .cropBox)
         let corner = CGPoint(x: max(crop.minX + 20, min(center.x - size.width / 2, crop.maxX - 20 - size.width)),
                              y: min(crop.maxY - 20, max(center.y + size.height / 2, crop.minY + 20 + size.height)))
