@@ -23,10 +23,25 @@ if [[ "$1" == "--if-due" && -f "$APP/embedded.mobileprovision" ]] && (( $(expiry
   exit 0
 fi
 
+# A partir de aquí toca renovar: si algo falla, aviso en el Mac (como mucho uno cada 12 h para no repetirlo
+# en cada intento de la tarea automática, salvo que cambie el motivo)
+REASON="la compilación o la instalación ha fallado"
+NOTIFIED="$HOME/Library/Application Support/MDobe/ipad-last-alert"
+notify_failure() {
+  local until="" last_reason="" last_time=0
+  [[ -f "$APP/embedded.mobileprovision" ]] && until=" La app actual caduca el $(date -r $(expiry "$APP/embedded.mobileprovision") '+%d/%m %H:%M')."
+  [[ -f "$NOTIFIED" ]] && { last_time=$(head -1 "$NOTIFIED"); last_reason=$(tail -1 "$NOTIFIED"); }
+  [[ "$last_reason" == "$REASON" ]] && (( $(date +%s) - last_time < 12 * 3600 )) && return
+  printf '%s\n%s\n' "$(date +%s)" "$REASON" > "$NOTIFIED"
+  local msg="No se ha podido renovar: $REASON.$until"
+  osascript -e "display notification \"${msg//\"/\\\"}\" with title \"MDobe iPad\" sound name \"Basso\"" >/dev/null 2>&1 || true
+}
+trap 'rc=$?; (( rc != 0 )) && { log "Fallo: $REASON"; notify_failure; }' EXIT
+
 # Equipo personal de Xcode (se crea al añadir el Apple ID en Xcode → Ajustes → Cuentas)
 TEAM=$(defaults read com.apple.dt.Xcode IDEProvisioningTeamByIdentifier 2>/dev/null | grep -m1 -oE 'teamID = [A-Z0-9]{10}' | awk '{print $3}')
 [[ -z "$TEAM" ]] && TEAM=$(defaults read com.apple.dt.Xcode IDEProvisioningTeams 2>/dev/null | grep -m1 -oE 'teamID = [A-Z0-9]{10}' | awk '{print $3}')
-if [[ -z "$TEAM" ]]; then log "No encuentro tu Apple ID en Xcode (Ajustes → Cuentas)."; exit 1; fi
+if [[ -z "$TEAM" ]]; then REASON="no encuentro tu Apple ID en Xcode (Ajustes → Cuentas)"; exit 1; fi
 
 # Primer iPad emparejado y disponible
 JSON=$(mktemp)
@@ -41,7 +56,7 @@ for x in d.get("result",{}).get("devices",[]):
         print(x["identifier"]); break
 ' "$JSON")
 rm -f "$JSON"
-if [[ -z "$DEVICE" ]]; then log "iPad no disponible (¿misma wifi y desbloqueado?)."; exit 1; fi
+if [[ -z "$DEVICE" ]]; then REASON="el iPad no está disponible (¿misma wifi y desbloqueado?)"; exit 1; fi
 
 # Borra el perfil guardado de MDobe si está a punto de caducar, para que Xcode pida uno nuevo de 7 días
 for f in "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"/*.mobileprovision(N); do
@@ -50,11 +65,20 @@ for f in "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"/*.mobile
 done
 
 xcodegen generate --quiet
-xcodebuild -project MDobe.xcodeproj -scheme MDobeiPad -configuration Release -destination generic/platform=iOS \
+BUILDLOG=$(mktemp)
+REASON="la compilación ha fallado (mira ~/Library/Logs/MDobe-ipad.log)"
+if ! xcodebuild -project MDobe.xcodeproj -scheme MDobeiPad -configuration Release -destination generic/platform=iOS \
   -derivedDataPath build/ios-signed -allowProvisioningUpdates \
-  DEVELOPMENT_TEAM="$TEAM" CODE_SIGN_STYLE=Automatic -quiet build
+  DEVELOPMENT_TEAM="$TEAM" CODE_SIGN_STYLE=Automatic -quiet build >"$BUILDLOG" 2>&1; then
+  cat "$BUILDLOG"
+  grep -q "No Accounts" "$BUILDLOG" && REASON="Xcode ha cerrado la sesión de tu Apple ID; vuelve a iniciarla en Xcode → Ajustes → Cuentas"
+  rm -f "$BUILDLOG"; exit 1
+fi
+cat "$BUILDLOG"; rm -f "$BUILDLOG"
+REASON="no se ha podido instalar en el iPad"
 xcrun devicectl device install app --device "$DEVICE" "$APP" >/dev/null
 date +%s > "$STAMP"
+rm -f "$NOTIFIED"
 log "MDobe instalado en el iPad (válido hasta el $(date -r $(expiry "$APP/embedded.mobileprovision") '+%d/%m %H:%M'); se renueva solo)."
 # Ejecutado desde el repo: actualiza la copia que usa la tarea automática con este código
 [[ -x scripts/install-ipad-agent.sh && "$PWD" != "$HOME/Library/Application Support/MDobe/ipad-src" ]] && ./scripts/install-ipad-agent.sh --sync-only
